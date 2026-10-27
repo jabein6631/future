@@ -1515,6 +1515,21 @@
       if (overlay) {
         overlay.classList.remove('portal-hidden');
         overlay.style.display = 'flex';
+        overlay.style.opacity = '1';
+        overlay.style.visibility = 'visible';
+        overlay.style.pointerEvents = 'auto';
+        overlay.style.transform = 'scale(1)';
+
+        // Ensure Sign In tab is active by default
+        const signInTab = document.getElementById('portalTabSignIn');
+        const signUpTab = document.getElementById('portalTabSignUp');
+        const loginPane = document.getElementById('portalLoginPane');
+        const regPane = document.getElementById('portalRegPane');
+        if (signInTab) signInTab.classList.add('active');
+        if (signUpTab) signUpTab.classList.remove('active');
+        if (loginPane) loginPane.style.display = 'block';
+        if (regPane) regPane.style.display = 'none';
+
         // Refresh persona avatar SVGs
         const sriAvatar = document.getElementById('portalAvatarSri');
         const rishithaAvatar = document.getElementById('portalAvatarRishitha');
@@ -4925,7 +4940,11 @@
       });
 
       document.getElementById('closeAuthModalBtn')?.addEventListener('click', closeAuth);
-      document.getElementById('cancelAuthLoginBtn')?.addEventListener('click', () => {
+      document.getElementById('cancelAuthLoginBtn')?.addEventListener('click', (e) => {
+        if (e) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
         closeAuth();
         if (window.skillSwapConference && window.skillSwapConference.isInCall) {
           window.skillSwapConference.leaveMeeting();
@@ -9227,19 +9246,26 @@
       document.getElementById('navAuthBtn')?.addEventListener('click', () => openAuth('authSignInTab'));
 
       document.getElementById('dropdownLogoutBtn')?.addEventListener('click', (e) => {
-        e.stopPropagation();
+        if (e) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
         document.getElementById('personaDropdown')?.classList.remove('show');
         if (window.skillSwapConference && window.skillSwapConference.isInCall) {
           window.skillSwapConference.leaveMeeting();
         }
         window.store.logout();
-        this.showToast('Signed out successfully. Switched to guest login.', 'user');
-        this.renderAll();
-        openAuth('authSignInTab');
+        this.updateSidebarBadges({ messages: 0, bookSwap: 0, mySessions: 0, support: 0, certificates: 0, assessments: 0, liveRoom: 0 });
+        this.showEntrancePortal();
+        this.showToast('Signed out successfully. Welcome to the Login Portal.', 'user');
       });
 
       document.getElementById('closeAuthModalBtn')?.addEventListener('click', closeAuth);
-      document.getElementById('cancelAuthLoginBtn')?.addEventListener('click', () => {
+      document.getElementById('cancelAuthLoginBtn')?.addEventListener('click', (e) => {
+        if (e) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
         closeAuth();
         if (window.skillSwapConference && window.skillSwapConference.isInCall) {
           window.skillSwapConference.leaveMeeting();
