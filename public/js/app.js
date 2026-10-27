@@ -4925,7 +4925,16 @@
       });
 
       document.getElementById('closeAuthModalBtn')?.addEventListener('click', closeAuth);
-      document.getElementById('cancelAuthLoginBtn')?.addEventListener('click', closeAuth);
+      document.getElementById('cancelAuthLoginBtn')?.addEventListener('click', () => {
+        closeAuth();
+        if (window.skillSwapConference && window.skillSwapConference.isInCall) {
+          window.skillSwapConference.leaveMeeting();
+        }
+        window.store.logout();
+        this.updateSidebarBadges({ messages: 0, bookSwap: 0, mySessions: 0, support: 0, certificates: 0, assessments: 0, liveRoom: 0 });
+        this.showEntrancePortal();
+        this.showToast('Signed out successfully. Welcome to the Login Portal.', 'user');
+      });
       document.getElementById('cancelAuthRegisterBtn')?.addEventListener('click', closeAuth);
       document.getElementById('closeAuthRolesBtn')?.addEventListener('click', closeAuth);
 
@@ -9230,7 +9239,16 @@
       });
 
       document.getElementById('closeAuthModalBtn')?.addEventListener('click', closeAuth);
-      document.getElementById('cancelAuthLoginBtn')?.addEventListener('click', closeAuth);
+      document.getElementById('cancelAuthLoginBtn')?.addEventListener('click', () => {
+        closeAuth();
+        if (window.skillSwapConference && window.skillSwapConference.isInCall) {
+          window.skillSwapConference.leaveMeeting();
+        }
+        window.store.logout();
+        this.updateSidebarBadges({ messages: 0, bookSwap: 0, mySessions: 0, support: 0, certificates: 0, assessments: 0, liveRoom: 0 });
+        this.showEntrancePortal();
+        this.showToast('Signed out successfully. Welcome to the Login Portal.', 'user');
+      });
       document.getElementById('cancelAuthRegisterBtn')?.addEventListener('click', closeAuth);
       document.getElementById('closeAuthRolesBtn')?.addEventListener('click', closeAuth);
 
