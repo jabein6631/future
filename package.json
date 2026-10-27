@@ -7,7 +7,6 @@
     "start": "node backend/server.js",
     "seed": "node backend/database/seed.js",
     "clean": "node backend/database/clean_db.js",
-    "sync:trusodb": "node backend/database/sync_trusodb.js",
     "dev:server": "node --watch backend/server.js",
     "dev": "vite",
     "prebuild": "node -e \"const fs=require('fs'); ['css','js','assets'].forEach(d => { if(fs.existsSync('frontend/'+d)) fs.cpSync('frontend/'+d, 'public/'+d, {recursive:true}); });\"",
