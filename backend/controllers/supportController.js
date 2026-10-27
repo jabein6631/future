@@ -13,6 +13,7 @@
 const { db } = require('../database/db');
 
 function safeBroadcast(event, data) {
+  if (process.env.VERCEL) return;
   try {
     const serverModule = require('../server');
     if (serverModule && typeof serverModule.broadcastSupportEvent === 'function') {

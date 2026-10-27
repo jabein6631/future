@@ -6,11 +6,9 @@
 const { db } = require('../database/db');
 
 let serverModule = null;
-try {
-  serverModule = require('../server');
-} catch (e) {}
 
 function safeChatBroadcast(event, data) {
+  if (process.env.VERCEL) return;
   try {
     if (!serverModule) {
       serverModule = require('../server');
@@ -19,7 +17,7 @@ function safeChatBroadcast(event, data) {
       serverModule.broadcastChatEvent({ event, ...data });
     }
   } catch (err) {
-    console.warn('safeChatBroadcast notice:', err.message);
+    // Silently ignore if server module is not running
   }
 }
 

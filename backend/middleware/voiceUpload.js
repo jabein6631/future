@@ -7,15 +7,19 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
-const voiceDir = path.join(__dirname, '../../uploads/voice');
-if (!fs.existsSync(voiceDir)) {
-  fs.mkdirSync(voiceDir, { recursive: true });
-}
-
 let storage;
 if (process.env.VERCEL) {
   storage = multer.memoryStorage();
 } else {
+  const voiceDir = path.join(__dirname, '../../uploads/voice');
+  try {
+    if (!fs.existsSync(voiceDir)) {
+      fs.mkdirSync(voiceDir, { recursive: true });
+    }
+  } catch (err) {
+    console.warn('⚠️ Serverless read-only filesystem notice in voiceUpload:', err.message);
+  }
+
   try {
     storage = multer.diskStorage({
       destination: (req, file, cb) => {

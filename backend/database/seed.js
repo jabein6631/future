@@ -673,8 +673,10 @@ async function seedDatabase() {
   console.log('✅ Database successfully seeded with 4 Tutor Categories, Login Tracking, and Support Team Doubt Tickets & Attachments!');
 }
 
-seedDatabase().catch(err => {
-  console.error('❌ Error seeding database:', err);
-});
+if (require.main === module) {
+  seedDatabase().catch(err => {
+    console.error('❌ Error seeding database:', err);
+  });
+}
 
 module.exports = { seedDatabase };

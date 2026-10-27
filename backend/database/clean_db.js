@@ -72,10 +72,12 @@ async function cleanDatabase() {
   console.log('\n✨ Database is completely cleared! All tables exist with 0 rows.');
 }
 
-cleanDatabase()
-  .then(() => process.exit(0))
-  .catch(err => {
-    console.error('❌ Error cleaning database:', err);
-    process.exit(1);
-  });
+if (require.main === module) {
+  cleanDatabase()
+    .then(() => process.exit(0))
+    .catch(err => {
+      console.error('❌ Error cleaning database:', err);
+      process.exit(1);
+    });
+}
 

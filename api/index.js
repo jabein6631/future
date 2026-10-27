@@ -22,11 +22,13 @@ try {
   console.warn('⚠️ Auth middleware load notice:', err.message);
 }
 
+let routeLoadError = null;
 try {
   const apiRoutes = require('../backend/routes');
   app.use('/api', apiRoutes);
   app.use('/', apiRoutes);
 } catch (err) {
+  routeLoadError = err;
   console.error('💥 API routes load error:', err);
 }
 
@@ -35,7 +37,15 @@ app.use('/api', errorHandler);
 app.use(errorHandler);
 
 app.all('*', (req, res) => {
+  if (routeLoadError) {
+    return res.status(500).json({
+      success: false,
+      error: 'Backend API routes failed to initialize: ' + routeLoadError.message,
+      stack: routeLoadError.stack
+    });
+  }
   res.status(404).json({ success: false, error: 'API route not found: ' + req.originalUrl });
 });
+
 
 module.exports = app;
