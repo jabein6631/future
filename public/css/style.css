@@ -7356,3 +7356,240 @@ body,
   color: var(--primary);
   opacity: 1;
 }
+
+/* ==========================================================================
+   Interactive Dark-Green Time Selector (Reference Design)
+   ========================================================================== */
+.dark-green-time-wrapper {
+  position: relative;
+  width: 100%;
+}
+
+.dark-green-time-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: 42px;
+  min-height: 42px;
+  padding: 0.6rem 0.85rem;
+  background-color: #064E3B;
+  color: #ffffff;
+  border: 1px solid #064E3B;
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(6, 78, 59, 0.28);
+  cursor: pointer;
+  box-sizing: border-box;
+  font-family: inherit;
+  user-select: none;
+  transition: background-color 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease, transform 0.15s ease;
+}
+
+.dark-green-time-btn:hover {
+  background-color: #043f30;
+  border-color: #033226;
+  box-shadow: 0 6px 18px rgba(6, 78, 59, 0.38);
+}
+
+.dark-green-time-btn:focus-visible,
+.dark-green-time-btn.focused {
+  outline: none;
+  border-color: #10b981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.4), 0 4px 14px rgba(6, 78, 59, 0.3);
+}
+
+.dark-green-time-icon-left {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.05rem;
+  color: #ffffff;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.dark-green-time-display {
+  flex-grow: 1;
+  text-align: center;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #ffffff;
+  letter-spacing: 0.6px;
+  padding: 0 0.5rem;
+}
+
+.dark-green-time-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  color: #ffffff;
+  opacity: 0.92;
+  transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  flex-shrink: 0;
+}
+
+.dark-green-time-btn.open .dark-green-time-chevron {
+  transform: rotate(180deg);
+}
+
+/* Floating White Dropdown Panel directly below */
+.dark-green-time-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 1050;
+  background: #ffffff;
+  border-radius: 14px;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 12px 30px -4px rgba(0, 0, 0, 0.16), 0 8px 14px -6px rgba(0, 0, 0, 0.08);
+  padding: 0.85rem 1rem;
+  min-width: 235px;
+  box-sizing: border-box;
+  animation: timePickerDropdownFadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes timePickerDropdownFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.dark-green-time-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.65rem;
+}
+
+.time-control-column {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.time-arrow-btn {
+  background: transparent;
+  border: none;
+  padding: 4px 8px;
+  cursor: pointer;
+  color: #059669;
+  font-size: 0.82rem;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.time-arrow-btn:hover {
+  background: #ecfdf5;
+  color: #047857;
+  transform: scale(1.2);
+}
+
+.time-arrow-btn:active {
+  transform: scale(0.92);
+}
+
+.time-arrow-btn:focus-visible {
+  outline: 2px solid #10b981;
+  outline-offset: 1px;
+}
+
+.time-digit-input {
+  width: 44px;
+  height: 38px;
+  background: #f1f5f9;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  text-align: center;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #1e293b;
+  font-family: inherit;
+  padding: 0;
+  box-sizing: border-box;
+  outline: none;
+  transition: all 0.15s ease;
+  cursor: text;
+}
+
+.time-digit-input:hover {
+  background: #e2e8f0;
+}
+
+.time-digit-input:focus {
+  background: #ffffff;
+  border-color: #10b981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2);
+}
+
+.time-colon-separator {
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: #334155;
+  margin: 0 0.1rem;
+  line-height: 1;
+  align-self: center;
+  user-select: none;
+}
+
+/* AM / PM Segmented Pill */
+.time-meridiem-toggle-group {
+  display: inline-flex;
+  align-items: center;
+  background: #f1f5f9;
+  border-radius: 20px;
+  padding: 3px;
+  border: 1px solid #e2e8f0;
+  margin-left: 0.35rem;
+  user-select: none;
+}
+
+.time-meridiem-btn {
+  background: transparent;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 16px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #64748b;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  line-height: 1;
+  font-family: inherit;
+}
+
+.time-meridiem-btn:hover:not(.active) {
+  color: #1e293b;
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.time-meridiem-btn.active {
+  background: #059669;
+  color: #ffffff;
+  font-weight: 700;
+  box-shadow: 0 2px 8px rgba(5, 150, 105, 0.38);
+}
+
+.time-meridiem-btn:focus-visible {
+  outline: 2px solid #10b981;
+  outline-offset: 1px;
+}
+
+@media (max-width: 640px) {
+  .dark-green-time-dropdown {
+    left: 0;
+    right: auto;
+    min-width: 220px;
+  }
+}

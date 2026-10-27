@@ -2674,7 +2674,238 @@
       this.openCreateMasterclassPage();
     },
 
+    initDarkGreenTimePicker() {
+      const pickerBtn = document.getElementById('mcTimePickerBtn');
+      const dropdown = document.getElementById('mcTimeDropdown');
+      const timeDisplay = document.getElementById('mcTimeDisplay');
+      const timeInput = document.getElementById('mcTimeInput');
+      const hourBox = document.getElementById('mcHourBox');
+      const minuteBox = document.getElementById('mcMinuteBox');
+      const hourUpBtn = document.getElementById('mcHourUpBtn');
+      const hourDownBtn = document.getElementById('mcHourDownBtn');
+      const minUpBtn = document.getElementById('mcMinuteUpBtn');
+      const minDownBtn = document.getElementById('mcMinuteDownBtn');
+      const amBtn = document.getElementById('mcAmBtn');
+      const pmBtn = document.getElementById('mcPmBtn');
+
+      if (!pickerBtn || !dropdown || !timeDisplay || !timeInput) return;
+
+      // Avoid double binding on the same DOM element
+      if (pickerBtn._timePickerInitialized) return;
+      pickerBtn._timePickerInitialized = true;
+
+      let currentHour = 5;
+      let currentMinute = 0;
+      let currentPeriod = 'PM';
+
+      const updateUI = () => {
+        const formattedHour = String(currentHour).padStart(2, '0');
+        const formattedMinute = String(currentMinute).padStart(2, '0');
+        const displayStr = `${formattedHour} : ${formattedMinute} ${currentPeriod}`;
+
+        let h24 = currentHour;
+        if (currentPeriod === 'PM' && currentHour < 12) h24 = currentHour + 12;
+        if (currentPeriod === 'AM' && currentHour === 12) h24 = 0;
+        const time24 = `${String(h24).padStart(2, '0')}:${formattedMinute}`;
+
+        timeDisplay.textContent = displayStr;
+        pickerBtn.setAttribute('aria-label', `Select start time, currently ${displayStr}`);
+        if (hourBox) hourBox.value = formattedHour;
+        if (minuteBox) minuteBox.value = formattedMinute;
+
+        if (currentPeriod === 'AM') {
+          amBtn?.classList.add('active');
+          amBtn?.setAttribute('aria-pressed', 'true');
+          pmBtn?.classList.remove('active');
+          pmBtn?.setAttribute('aria-pressed', 'false');
+        } else {
+          pmBtn?.classList.add('active');
+          pmBtn?.setAttribute('aria-pressed', 'true');
+          amBtn?.classList.remove('active');
+          amBtn?.setAttribute('aria-pressed', 'false');
+        }
+
+        timeInput.value = time24;
+        timeInput.dispatchEvent(new Event('input', { bubbles: true }));
+        timeInput.dispatchEvent(new Event('change', { bubbles: true }));
+      };
+
+      const setTime = (timeStr) => {
+        if (!timeStr) return;
+        try {
+          const str = String(timeStr).trim();
+          if (str.includes(':')) {
+            const parts = str.split(':');
+            let h = parseInt(parts[0], 10);
+            let mPart = parts[1].trim();
+            let m = parseInt(mPart.slice(0, 2), 10);
+            let p = 'PM';
+
+            if (/am/i.test(str)) {
+              p = 'AM';
+              if (h === 0) h = 12;
+            } else if (/pm/i.test(str)) {
+              p = 'PM';
+              if (h > 12) h = h - 12;
+            } else {
+              // 24-hour format
+              if (h >= 12) {
+                p = 'PM';
+                if (h > 12) h = h - 12;
+              } else {
+                p = 'AM';
+                if (h === 0) h = 12;
+              }
+            }
+
+            if (!isNaN(h) && h >= 1 && h <= 12) currentHour = h;
+            if (!isNaN(m) && m >= 0 && m <= 59) currentMinute = m;
+            currentPeriod = p;
+            updateUI();
+          }
+        } catch (e) {
+          console.warn('Could not parse time:', timeStr, e);
+        }
+      };
+
+      window.darkGreenTimePicker = {
+        setTime,
+        updateUI,
+        open: () => openDropdown(),
+        close: () => closeDropdown()
+      };
+
+      const openDropdown = () => {
+        dropdown.style.display = 'block';
+        pickerBtn.classList.add('open');
+        pickerBtn.setAttribute('aria-expanded', 'true');
+      };
+
+      const closeDropdown = () => {
+        dropdown.style.display = 'none';
+        pickerBtn.classList.remove('open');
+        pickerBtn.setAttribute('aria-expanded', 'false');
+      };
+
+      pickerBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (dropdown.style.display === 'none' || !dropdown.style.display) {
+          openDropdown();
+        } else {
+          closeDropdown();
+        }
+      });
+
+      // Hour Up / Down (1 to 12)
+      hourUpBtn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        currentHour = currentHour >= 12 ? 1 : currentHour + 1;
+        updateUI();
+      });
+
+      hourDownBtn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        currentHour = currentHour <= 1 ? 12 : currentHour - 1;
+        updateUI();
+      });
+
+      // Minute Up / Down (5-minute step increments)
+      minUpBtn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        currentMinute = (Math.floor(currentMinute / 5) * 5 + 5) % 60;
+        updateUI();
+      });
+
+      minDownBtn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        currentMinute = (Math.floor((currentMinute + 4) / 5) * 5 - 5 + 60) % 60;
+        updateUI();
+      });
+
+      // AM / PM Toggle
+      amBtn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        currentPeriod = 'AM';
+        updateUI();
+      });
+
+      pmBtn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        currentPeriod = 'PM';
+        updateUI();
+      });
+
+      // Direct editing in Hour Box
+      hourBox?.addEventListener('change', () => {
+        let val = parseInt(hourBox.value, 10);
+        if (!isNaN(val) && val >= 1 && val <= 12) {
+          currentHour = val;
+        }
+        updateUI();
+      });
+
+      hourBox?.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          currentHour = currentHour >= 12 ? 1 : currentHour + 1;
+          updateUI();
+        } else if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          currentHour = currentHour <= 1 ? 12 : currentHour - 1;
+          updateUI();
+        }
+      });
+
+      // Direct editing in Minute Box
+      minuteBox?.addEventListener('change', () => {
+        let val = parseInt(minuteBox.value, 10);
+        if (!isNaN(val) && val >= 0 && val <= 59) {
+          currentMinute = val;
+        }
+        updateUI();
+      });
+
+      minuteBox?.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          currentMinute = (currentMinute + 5) % 60;
+          updateUI();
+        } else if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          currentMinute = (currentMinute - 5 + 60) % 60;
+          updateUI();
+        }
+      });
+
+      // Close when clicking outside
+      document.addEventListener('click', (e) => {
+        if (!pickerBtn.contains(e.target) && !dropdown.contains(e.target)) {
+          closeDropdown();
+        }
+      });
+
+      // Escape key closes dropdown
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && dropdown.style.display !== 'none') {
+          closeDropdown();
+          pickerBtn.focus();
+        }
+      });
+
+      dropdown.addEventListener('click', (e) => {
+        e.stopPropagation();
+      });
+
+      if (timeInput.value && timeInput.value !== '17:00') {
+        setTime(timeInput.value);
+      } else {
+        updateUI();
+      }
+    },
+
     bindCreateMasterclassEvents() {
+      this.initDarkGreenTimePicker();
+
       const inputs = [
         'mcTitleInput', 'mcSubjectSelect', 'mcCategorySelect',
         'mcShortDescInput', 'mcDateInput', 'mcTimeInput',
@@ -2835,6 +3066,10 @@
           dateInput.value = tomorrow.toISOString().split('T')[0];
           dateInput.min = new Date().toISOString().split('T')[0];
         }
+        this.initDarkGreenTimePicker();
+        if (window.darkGreenTimePicker) {
+          window.darkGreenTimePicker.setTime('17:00');
+        }
       }
 
       this.updateMasterclassPreview();
@@ -2860,7 +3095,13 @@
       if (document.getElementById('mcThumbnailInput')) document.getElementById('mcThumbnailInput').value = sess.image_url || sess.thumbnail_url || '';
       if (document.getElementById('mcShortDescInput')) document.getElementById('mcShortDescInput').value = sess.description || '';
       if (document.getElementById('mcDateInput')) document.getElementById('mcDateInput').value = sess.date || '';
-      if (document.getElementById('mcTimeInput')) document.getElementById('mcTimeInput').value = sess.time || '';
+      if (document.getElementById('mcTimeInput')) {
+        document.getElementById('mcTimeInput').value = sess.time || '';
+        this.initDarkGreenTimePicker();
+        if (sess.time && window.darkGreenTimePicker) {
+          window.darkGreenTimePicker.setTime(sess.time);
+        }
+      }
       if (document.getElementById('mcDurationSelect')) document.getElementById('mcDurationSelect').value = String(sess.hours || '1');
       if (document.getElementById('mcPlatformSelect')) document.getElementById('mcPlatformSelect').value = sess.platform || sess.meeting_platform || 'Google Meet';
       if (document.getElementById('mcMaxParticipantsSelect')) document.getElementById('mcMaxParticipantsSelect').value = String(sess.max_capacity || '30');
@@ -3091,7 +3332,14 @@
         }
       }
 
-      if (prevTime) prevTime.textContent = `${timeVal} (${durationText})`;
+      let formattedPreviewTime = timeVal;
+      if (timeVal && timeVal.includes(':') && !timeVal.includes('M')) {
+        const [h, m] = timeVal.split(':').map(Number);
+        const p = h >= 12 ? 'PM' : 'AM';
+        const h12 = h % 12 || 12;
+        formattedPreviewTime = `${String(h12).padStart(2, '0')}:${String(m).padStart(2, '0')} ${p}`;
+      }
+      if (prevTime) prevTime.textContent = `${formattedPreviewTime} (${durationText})`;
       if (prevCapacity) prevCapacity.textContent = `${capacity} students`;
       if (prevPlatform) prevPlatform.textContent = platform;
 
@@ -3149,8 +3397,35 @@
       }
       if (!time) {
         alert('Please enter a Start Time.');
-        document.getElementById('mcTimeInput')?.focus();
+        document.getElementById('mcTimePickerBtn')?.focus();
         return;
+      }
+
+      // Ensure the chosen date and time are validated against the current local time
+      if (date && time) {
+        try {
+          let hours = 0;
+          let minutes = 0;
+          if (time.includes(':')) {
+            const parts = time.split(':');
+            hours = parseInt(parts[0], 10);
+            const rest = parts[1].trim();
+            minutes = parseInt(rest.slice(0, 2), 10);
+            if (rest.toUpperCase().includes('PM') && hours < 12) hours += 12;
+            if (rest.toUpperCase().includes('AM') && hours === 12) hours = 0;
+          }
+          const [y, m, d] = date.split('-').map(Number);
+          const selectedDateTime = new Date(y, m - 1, d, hours, minutes, 0, 0);
+          const now = new Date();
+
+          if (selectedDateTime <= now) {
+            alert('The masterclass start time cannot be in the past. Please select a future date and time.');
+            document.getElementById('mcTimePickerBtn')?.focus();
+            return;
+          }
+        } catch (e) {
+          console.warn('Time validation check:', e);
+        }
       }
       if (status === 'Confirmed' && !agreed) {
         alert('Please agree to follow the community guidelines.');

@@ -1234,13 +1234,56 @@
                     style="width: 100%; padding: 0.6rem 0.75rem; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.85rem;"
                     required>
                 </div>
-                <div class="form-group">
-                  <label class="form-label"
+                <div class="form-group dark-green-time-wrapper" style="position: relative;">
+                  <label class="form-label" for="mcTimePickerBtn"
                     style="font-weight: 600; font-size: 0.85rem; color: #334155; margin-bottom: 0.4rem; display: block;">Start
                     Time <span style="color: #ef4444;">*</span></label>
-                  <input type="text" class="form-control" id="mcTimeInput" placeholder="e.g. 05:00 PM"
-                    style="width: 100%; padding: 0.6rem 0.75rem; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.85rem;"
-                    required>
+                  
+                  <!-- Dark Green Interactive Trigger Button matching reference design -->
+                  <button type="button" class="dark-green-time-btn" id="mcTimePickerBtn" aria-haspopup="dialog" aria-expanded="false" aria-label="Select start time, currently 05:00 PM">
+                    <span class="dark-green-time-icon-left"><i class="fa-regular fa-clock" aria-hidden="true"></i></span>
+                    <span class="dark-green-time-display" id="mcTimeDisplay">05 : 00 PM</span>
+                    <span class="dark-green-time-chevron"><i class="fa-solid fa-chevron-down" id="mcTimeChevron" aria-hidden="true"></i></span>
+                  </button>
+
+                  <!-- Hidden input storing reliable HH:mm 24-hour format for form submission and backend sync -->
+                  <input type="hidden" id="mcTimeInput" name="time" value="17:00" required>
+
+                  <!-- White Dropdown Panel directly below -->
+                  <div class="dark-green-time-dropdown" id="mcTimeDropdown" role="dialog" aria-label="Start time selector" style="display: none;">
+                    <div class="dark-green-time-controls">
+                      <!-- Hour Column -->
+                      <div class="time-control-column">
+                        <button type="button" class="time-arrow-btn" id="mcHourUpBtn" aria-label="Increase hour" title="Increase hour">
+                          <i class="fa-solid fa-chevron-up"></i>
+                        </button>
+                        <input type="text" class="time-digit-input" id="mcHourBox" value="05" maxlength="2" inputmode="numeric" aria-label="Hour (1 to 12)">
+                        <button type="button" class="time-arrow-btn" id="mcHourDownBtn" aria-label="Decrease hour" title="Decrease hour">
+                          <i class="fa-solid fa-chevron-down"></i>
+                        </button>
+                      </div>
+
+                      <!-- Colon Separator -->
+                      <div class="time-colon-separator">:</div>
+
+                      <!-- Minute Column -->
+                      <div class="time-control-column">
+                        <button type="button" class="time-arrow-btn" id="mcMinuteUpBtn" aria-label="Increase minute" title="Increase minute">
+                          <i class="fa-solid fa-chevron-up"></i>
+                        </button>
+                        <input type="text" class="time-digit-input" id="mcMinuteBox" value="00" maxlength="2" inputmode="numeric" aria-label="Minute (00 to 59)">
+                        <button type="button" class="time-arrow-btn" id="mcMinuteDownBtn" aria-label="Decrease minute" title="Decrease minute">
+                          <i class="fa-solid fa-chevron-down"></i>
+                        </button>
+                      </div>
+
+                      <!-- AM / PM Segmented Toggle Buttons -->
+                      <div class="time-meridiem-toggle-group" role="group" aria-label="Select AM or PM">
+                        <button type="button" class="time-meridiem-btn" id="mcAmBtn" aria-pressed="false">AM</button>
+                        <button type="button" class="time-meridiem-btn active" id="mcPmBtn" aria-pressed="true">PM</button>
+                      </div>
+                    </div>
+                  </div>
                 </div>
                 <div class="form-group">
                   <label class="form-label"
