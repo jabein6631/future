@@ -118,16 +118,31 @@ html {
   line-height: 1.5;
   color: var(--text-primary);
   background-color: var(--bg-main);
-  scroll-behavior: smooth;
   -webkit-font-smoothing: antialiased;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
 }
 
 body {
-  min-height: 100vh;
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
   background-color: var(--bg-main);
-  overflow-x: hidden;
+  overflow: hidden;
+  position: relative;
+}
+
+#root,
+#skillswap-react-root-container {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
 }
 
 a {
@@ -162,10 +177,13 @@ img {
    Top Navigation Bar
    ========================================================================== */
 .top-navbar {
-  position: sticky;
+  position: fixed;
   top: 0;
-  z-index: 100;
+  left: 0;
+  right: 0;
+  width: 100%;
   height: var(--header-height);
+  z-index: 1000;
   background: var(--bg-glass);
   border-bottom: 1px solid var(--border-subtle);
   backdrop-filter: blur(16px);
@@ -176,6 +194,7 @@ img {
   padding: 0 2rem;
   box-shadow: var(--shadow-sm);
   transition: background var(--transition-normal);
+  box-sizing: border-box;
 }
 
 .brand-wrapper {
@@ -712,21 +731,37 @@ img {
    App Shell (Sidebar & Main Container)
    ========================================================================== */
 .app-container {
+  position: fixed;
+  top: var(--header-height);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: calc(100vh - var(--header-height));
+  width: 100%;
   display: flex;
-  flex: 1;
-  min-height: calc(100vh - var(--header-height));
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
 .sidebar {
+  position: fixed;
+  top: var(--header-height);
+  left: 0;
+  bottom: 0;
   width: var(--sidebar-width);
+  height: calc(100vh - var(--header-height));
   background: var(--sidebar-bg);
   border-right: 1px solid var(--sidebar-border);
-  padding: 1.5rem 0.85rem;
+  padding: 1.25rem 0.85rem 3rem;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
+  justify-content: flex-start;
   flex-shrink: 0;
   box-shadow: 2px 0 10px rgba(0, 0, 0, 0.15);
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  z-index: 900;
+  box-sizing: border-box;
 }
 
 .sidebar-nav-group {
@@ -825,8 +860,23 @@ img {
 }
 
 .main-content {
-  flex: 1;
-  padding: 2rem;
+  position: fixed;
+  top: var(--header-height);
+  left: var(--sidebar-width);
+  right: 0;
+  bottom: 0;
+  height: calc(100vh - var(--header-height));
+  width: calc(100vw - var(--sidebar-width));
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  min-width: 0;
+  padding: 2rem 2.5rem 6rem;
+  box-sizing: border-box;
+  margin: 0;
+  background-color: var(--bg-main);
+}
+
+.main-content > .view-section {
   max-width: 1400px;
   margin: 0 auto;
   width: 100%;
@@ -2892,25 +2942,56 @@ body.modal-open {
 /* Responsive */
 @media (max-width: 1024px) {
   .app-container {
+    position: fixed;
+    top: var(--header-height);
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    height: calc(100vh - var(--header-height));
+    display: flex;
     flex-direction: column;
+    overflow: hidden;
   }
 
   .sidebar {
+    position: static;
     width: 100%;
+    height: 56px;
+    max-height: 56px;
+    flex-shrink: 0;
     border-right: none;
-    border-bottom: 1px solid var(--border-subtle);
-    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--sidebar-border);
+    padding: 0.4rem 0.75rem;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    box-shadow: none;
+    z-index: 900;
   }
 
   .sidebar-nav-group {
     flex-direction: row;
     overflow-x: auto;
-    padding-bottom: 0.5rem;
+    overflow-y: hidden;
+    white-space: nowrap;
+    padding-bottom: 0;
+    gap: 0.35rem;
   }
 
   .nav-section-title,
   .sidebar-footer-card {
     display: none;
+  }
+
+  .main-content {
+    position: static;
+    flex: 1;
+    width: 100%;
+    height: calc(100% - 56px);
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    padding: 1.25rem 1rem 6rem;
   }
 
   .session-room-container {
@@ -6041,10 +6122,12 @@ body.portal-active .session-timer-bar {
 }
 
 .main-content {
-  min-height: 100vh;
   padding-bottom: 6rem !important;
-  overflow-y: visible !important;
+  overflow-y: auto !important;
+  overscroll-behavior-y: contain !important;
 }
+
+
 
 #view-create-masterclass,
 #view-booking,
@@ -7454,6 +7537,7 @@ body,
     opacity: 0;
     transform: translateY(-6px) scale(0.97);
   }
+
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
@@ -7592,4 +7676,55 @@ body,
     right: auto;
     min-width: 220px;
   }
+}
+
+/* ==========================================================================
+   Independent Scrollbar Styling for Sidebar & Main Content
+   ========================================================================== */
+.sidebar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+}
+.sidebar::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+.sidebar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.sidebar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+}
+.sidebar:hover::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.32);
+}
+
+.main-content {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+.main-content::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+.main-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+.main-content::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+.main-content:hover::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+}
+
+[data-theme="dark"] .main-content {
+  scrollbar-color: #334155 transparent;
+}
+[data-theme="dark"] .main-content::-webkit-scrollbar-thumb {
+  background: #334155;
+}
+[data-theme="dark"] .main-content:hover::-webkit-scrollbar-thumb {
+  background: #475569;
 }

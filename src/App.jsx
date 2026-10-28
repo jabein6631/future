@@ -64,7 +64,7 @@ export default function App() {
     <div
       ref={containerRef}
       id="skillswap-react-root-container"
-      style={{ minHeight: '100vh', width: '100%', overflowX: 'hidden' }}
+      style={{ height: '100vh', width: '100vw', overflow: 'hidden' }}
       dangerouslySetInnerHTML={{ __html: rawTemplate }}
     />
   );
