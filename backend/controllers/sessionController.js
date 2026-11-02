@@ -395,6 +395,27 @@ const sessionController = {
         });
       }
 
+      // Check scheduled session timing (User and mentor cannot enter before scheduled start time)
+      const timing = supabaseService.getScheduledStartAndEndTimes(session);
+      const isEnded = timing.isPastEnd || ['COMPLETED', 'ENDED', 'CANCELLED', 'DECLINED'].includes((session.status || '').toUpperCase());
+      if (isEnded) {
+        return res.status(400).json({
+          success: false,
+          error: 'This session has completed or reached its scheduled duration.',
+          isExpired: true
+        });
+      }
+
+      if (!timing.isStarted) {
+        return res.status(400).json({
+          success: false,
+          error: `This session is scheduled to start at ${session.time || 'the scheduled time'} (${session.date || ''}). The classroom activates automatically when the scheduled time arrives.`,
+          scheduledStartTime: timing.startTime,
+          startsInMs: timing.startsInMs,
+          isUpcoming: true
+        });
+      }
+
       // Record live attendance for participants entering the room
       if (isTeacher) {
         await db.runAsync(

@@ -243,9 +243,101 @@ class CodeLabModule {
         referenceSolution: {
           python3: `class Solution:\n    def isValid(self, s: str) -> bool:\n        stack = []\n        mapping = {")": "(", "}": "{", "]": "["}\n        for char in s:\n            if char in mapping:\n                top = stack.pop() if stack else "#"\n                if mapping[char] != top: return False\n            else: stack.append(char)\n        return not stack`
         },
-        starterCode: { python3: '', javascript: '', java: '', cpp: '' },
+        starterCode: {
+          python3: `class Solution:
+    def isValid(self, s: str) -> bool:
+        # Write your solution here
+        stack = []
+        mapping = {")": "(", "}": "{", "]": "["}
+        for char in s:
+            if char in mapping:
+                top_element = stack.pop() if stack else '#'
+                if mapping[char] != top_element:
+                    return False
+            else:
+                stack.append(char)
+        return not stack
+`,
+          javascript: `/**
+ * @param {string} s
+ * @return {boolean}
+ */
+function isValid(s) {
+    const stack = [];
+    const map = {')': '(', '}': '{', ']': '['};
+    for (const char of s) {
+        if (map[char]) {
+            if (stack.pop() !== map[char]) return false;
+        } else {
+            stack.push(char);
+        }
+    }
+    return stack.length === 0;
+}
+`,
+          java: `// Java (OpenJDK 21) - Valid Parentheses
+import java.util.*;
+
+class Solution {
+    public static boolean isValid(String s) {
+        Stack<Character> stack = new Stack<>();
+        for (char c : s.toCharArray()) {
+            if (c == '(') stack.push(')');
+            else if (c == '{') stack.push('}');
+            else if (c == '[') stack.push(']');
+            else if (stack.isEmpty() || stack.pop() != c) return false;
+        }
+        return stack.isEmpty();
+    }
+
+    public static void main(String[] args) {
+        Scanner sc = new Scanner(System.in);
+        String input = sc.hasNext() ? sc.next() : "";
+        String s = input.contains("=") ? input.substring(input.indexOf('=') + 1).replace("\"", "").trim() : input;
+        System.out.println(isValid(s));
+    }
+}
+`,
+          cpp: `// C++ (GCC 13) - Valid Parentheses
+#include <iostream>
+#include <string>
+#include <stack>
+
+using namespace std;
+
+bool isValid(string s) {
+    stack<char> st;
+    for (char c : s) {
+        if (c == '(') st.push(')');
+        else if (c == '{') st.push('}');
+        else if (c == '[') st.push(']');
+        else {
+            if (st.empty() || st.top() != c) return false;
+            st.pop();
+        }
+    }
+    return st.empty();
+}
+
+int main() {
+    string input;
+    if (cin >> input) {
+        size_t eq = input.find('=');
+        string s = (eq != string::npos) ? input.substr(eq + 1) : input;
+        while (!s.empty() && (s.front() == '"' || s.front() == ' ')) s.erase(0, 1);
+        while (!s.empty() && (s.back() == '"' || s.back() == ' ')) s.pop_back();
+        cout << (isValid(s) ? "true" : "false") << endl;
+    }
+    return 0;
+}
+`
+        },
         testCases: [
-          { input: 's = "()"', expected: 'true' }
+          { input: 's = "()"', expected: 'true' },
+          { input: 's = "()[]{}"', expected: 'true' },
+          { input: 's = "(]"', expected: 'false' },
+          { input: 's = "([)]"', expected: 'false' },
+          { input: 's = "{[]}"', expected: 'true' }
         ]
       },
       {
@@ -541,17 +633,82 @@ class CodeLabModule {
     this.renderSubjectsList();
   }
 
+  escapeHtml(str) {
+    if (str === null || str === undefined) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  getStarterCode(prob, lang) {
+    if (!prob) return '';
+    const l = (lang || 'python3').toLowerCase().trim();
+    if (prob.starterCode && prob.starterCode[l]) {
+      return prob.starterCode[l];
+    }
+
+    const title = prob.title || 'Solution';
+    const id = prob.id || '';
+
+    if (l === 'python3' || l === 'python') {
+      if (id === 'two-sum') {
+        return `class Solution:\n    def twoSum(self, nums: list[int], target: int) -> list[int]:\n        # Write your code here\n        seen = {}\n        for i, num in enumerate(nums):\n            diff = target - num\n            if diff in seen:\n                return [seen[diff], i]\n            seen[num] = i\n        return []\n`;
+      }
+      if (id === 'reverse-a-string') {
+        return `class Solution:\n    def reverseString(self, s: list[str]) -> None:\n        # Write your code here\n        left, right = 0, len(s) - 1\n        while left < right:\n            s[left], s[right] = s[right], s[left]\n            left += 1\n            right -= 1\n`;
+      }
+      if (id === 'palindrome-number') {
+        return `class Solution:\n    def isPalindrome(self, x: int) -> bool:\n        # Write your code here\n        s = str(x)\n        return s == s[::-1]\n`;
+      }
+      if (id === 'fizz-buzz') {
+        return `class Solution:\n    def fizzBuzz(self, n: int) -> list[str]:\n        # Write your code here\n        res = []\n        for i in range(1, n + 1):\n            if i % 15 == 0: res.append("FizzBuzz")\n            elif i % 3 == 0: res.append("Fizz")\n            elif i % 5 == 0: res.append("Buzz")\n            else: res.append(str(i))\n        return res\n`;
+      }
+      if (id === 'valid-parentheses') {
+        return `class Solution:\n    def isValid(self, s: str) -> bool:\n        # Write your code here\n        stack = []\n        map_b = {")": "(", "}": "{", "]": "["}\n        for c in s:\n            if c in map_b:\n                if not stack or stack.pop() != map_b[c]:\n                    return False\n            else:\n                stack.append(c)\n        return not stack\n`;
+      }
+      return `# Python 3 - ${title}\nimport sys\n\ndef solve():\n    # Read input from standard input\n    raw_input = sys.stdin.read().strip()\n    # Write your solution here\n    print(raw_input)\n\nif __name__ == '__main__':\n    solve()\n`;
+    }
+
+    if (l === 'javascript' || l === 'js') {
+      if (id === 'two-sum') {
+        return `/**\n * @param {number[]} nums\n * @param {number} target\n * @return {number[]}\n */\nfunction twoSum(nums, target) {\n    const map = new Map();\n    for (let i = 0; i < nums.length; i++) {\n        const diff = target - nums[i];\n        if (map.has(diff)) {\n            return [map.get(diff), i];\n        }\n        map.set(nums[i], i);\n    }\n    return [];\n}\n`;
+      }
+      if (id === 'palindrome-number') {
+        return `function isPalindrome(x) {\n    const s = String(x);\n    return s === s.split('').reverse().join('');\n}\n`;
+      }
+      return `// JavaScript (Node.js) - ${title}\nconst fs = require('fs');\n\nfunction main() {\n    const input = fs.readFileSync(0, 'utf-8').trim();\n    // Write your solution here\n    console.log(input);\n}\n\nmain();\n`;
+    }
+
+    if (l === 'java') {
+      return `// Java (OpenJDK 21) - ${title}\nimport java.util.*;\n\nclass Main {\n    public static void main(String[] args) {\n        Scanner sc = new Scanner(System.in);\n        // Write your solution here\n        if (sc.hasNext()) {\n            System.out.println(sc.next());\n        }\n    }\n}\n`;
+    }
+
+    if (l === 'cpp') {
+      return `// C++ (GCC 13) - ${title}\n#include <iostream>\n#include <vector>\n#include <string>\n#include <algorithm>\n\nusing namespace std;\n\nint main() {\n    // Write your solution here\n    string s;\n    if (cin >> s) {\n        cout << s << endl;\n    }\n    return 0;\n}\n`;
+    }
+
+    if (l === 'c') {
+      return `// C (GCC 13) - ${title}\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\nint main() {\n    // Write your solution here\n    char buf[256];\n    if (fgets(buf, sizeof(buf), stdin)) {\n        printf("%s", buf);\n    }\n    return 0;\n}\n`;
+    }
+
+    return '';
+  }
+
   openProblem(problemId) {
     this.currentProblemId = problemId;
     this.currentStep = 4; // IDE
-    this.selectedLanguage = 'python3';
+    this.selectedLanguage = this.selectedLanguage || 'python3';
     this.activeIdeTab = 'description';
     this.activeRightTab = 'testcases';
     this.activeTestCaseIndex = 0;
     this.render();
+    const prob = this.problems.find(p => p.id === this.currentProblemId) || this.problems[0];
     const editor = document.getElementById('codelabCodeEditor');
     if (editor) {
-      editor.value = '';
+      editor.value = this.getStarterCode(prob, this.selectedLanguage);
     }
     this.updateLineNumbers();
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -565,17 +722,28 @@ class CodeLabModule {
   }
 
   setLanguage(lang) {
-    this.selectedLanguage = 'python3';
+    this.selectedLanguage = lang || 'python3';
+    const prob = this.problems.find(p => p.id === this.currentProblemId) || this.problems[0];
+    const editor = document.getElementById('codelabCodeEditor');
+    if (editor) {
+      editor.value = this.getStarterCode(prob, this.selectedLanguage);
+    }
     this.updateLineNumbers();
   }
 
   resetCode() {
+    const prob = this.problems.find(p => p.id === this.currentProblemId) || this.problems[0];
     const editor = document.getElementById('codelabCodeEditor');
     if (editor) {
-      editor.value = '';
+      editor.value = this.getStarterCode(prob, this.selectedLanguage);
       this.updateLineNumbers();
-      if (window.app && window.app.showToast) {
-        window.app.showToast('Code editor cleared', 'rotate-left');
+      if (window.app && typeof window.app.notify === 'function') {
+        window.app.notify({
+          title: '🔄 Editor Reset',
+          message: `Code editor reset to starter template for ${this.selectedLanguage}.`,
+          type: 'info',
+          target_page: 'view-codelab'
+        });
       }
     }
   }
@@ -655,297 +823,7 @@ class CodeLabModule {
     numEl.innerHTML = Array.from({ length: Math.max(lineCount, 15) }, (_, i) => i + 1).join('<br>');
   }
 
-  executePython3(codeStr, testCase, problemId) {
-    if (!codeStr || !codeStr.trim()) {
-      return { status: 'EMPTY', message: 'Please write your solution first.' };
-    }
-
-    try {
-      const jsCode = this.transpilePython3ToJS(codeStr);
-      return this.evaluateTranspiledJS(jsCode, testCase, problemId);
-    } catch (err) {
-      let errorMsg = err.message || String(err);
-      if (err instanceof SyntaxError || errorMsg.toLowerCase().includes('syntaxerror') || errorMsg.includes('expected')) {
-        if (!errorMsg.startsWith('SyntaxError')) {
-          errorMsg = 'SyntaxError: ' + errorMsg;
-        }
-      } else if (err instanceof ReferenceError || errorMsg.includes('ReferenceError') || errorMsg.includes('is not defined')) {
-        const varName = errorMsg.split(' ')[0] || 'variable';
-        errorMsg = `NameError: name '${varName.replace(/['"]/g, '')}' is not defined`;
-      }
-      return {
-        status: 'RUNTIME_ERROR',
-        output: errorMsg
-      };
-    }
-  }
-
-  transpilePython3ToJS(pyCode) {
-    const lines = pyCode.split('\n');
-
-    for (let i = 0; i < lines.length; i++) {
-      const trimmed = lines[i].trim();
-      if (!trimmed || trimmed.startsWith('#')) continue;
-      
-      const matchControl = trimmed.match(/^(if|elif|else|for|while|def|class|try|except|finally|with)\b(.*)$/);
-      if (matchControl) {
-        const rest = matchControl[2].split('#')[0].trim();
-        if (!rest.endsWith(':')) {
-          throw new SyntaxError(`expected ':' at line ${i + 1}`);
-        }
-      }
-    }
-
-    let paren = 0, bracket = 0, brace = 0;
-    for (let char of pyCode) {
-      if (char === '(') paren++;
-      if (char === ')') paren--;
-      if (char === '[') bracket++;
-      if (char === ']') bracket--;
-      if (char === '{') brace++;
-      if (char === '}') brace--;
-    }
-    if (paren !== 0 || bracket !== 0 || brace !== 0) {
-      throw new SyntaxError('unbalanced brackets or parentheses');
-    }
-
-    const indentStack = [0];
-    const outLines = [];
-
-    for (let i = 0; i < lines.length; i++) {
-      const rawLine = lines[i];
-      const commentIdx = rawLine.indexOf('#');
-      let lineNoComment = commentIdx >= 0 ? rawLine.slice(0, commentIdx) : rawLine;
-      
-      if (!lineNoComment.trim()) continue;
-
-      const indent = rawLine.search(/\S/);
-      const currentIndent = indentStack[indentStack.length - 1];
-
-      if (indent > currentIndent) {
-        indentStack.push(indent);
-        if (outLines.length > 0) {
-          outLines[outLines.length - 1] += ' {';
-        }
-      } else if (indent < currentIndent) {
-        while (indentStack.length > 1 && indentStack[indentStack.length - 1] > indent) {
-          indentStack.pop();
-          outLines.push('}');
-        }
-      }
-
-      let codeLine = lineNoComment.trim();
-
-      codeLine = codeLine.replace(/->\s*[^:]+:/, ':');
-      codeLine = codeLine.replace(/:\s*[^,):=]+/g, '');
-
-      if (codeLine.startsWith('class ')) {
-        const className = codeLine.replace('class ', '').replace(':', '').trim();
-        outLines.push(`class ${className}`);
-        continue;
-      }
-
-      if (codeLine.startsWith('def ')) {
-        let defContent = codeLine.replace('def ', '').replace(':', '').trim();
-        const firstParen = defContent.indexOf('(');
-        const funcName = defContent.slice(0, firstParen).trim();
-        let argsStr = defContent.slice(firstParen + 1, defContent.lastIndexOf(')')).trim();
-        
-        const args = argsStr.split(',').map(a => a.trim()).filter(a => a && a !== 'self');
-        const cleanArgs = args.join(', ');
-
-        if (indentStack.length > 1) {
-          outLines.push(`${funcName}(${cleanArgs})`);
-        } else {
-          outLines.push(`function ${funcName}(${cleanArgs})`);
-        }
-        continue;
-      }
-
-      codeLine = codeLine
-        .replace(/\bTrue\b/g, 'true')
-        .replace(/\bFalse\b/g, 'false')
-        .replace(/\bNone\b/g, 'null')
-        .replace(/\belif\b/g, 'else if')
-        .replace(/\bpass\b/g, '/* pass */')
-        .replace(/\bself\./g, 'this.')
-        .replace(/\band\b/g, '&&')
-        .replace(/\bor\b/g, '||')
-        .replace(/\bnot\s+/g, '!')
-        .replace(/\bis\s+not\b/g, '!==')
-        .replace(/\bis\b/g, '===');
-
-      if (codeLine.endsWith(':')) {
-        codeLine = codeLine.slice(0, -1).trim();
-      }
-
-      if (codeLine.startsWith('for ')) {
-        const enumMatch = codeLine.match(/^for\s+(.+)\s+in\s+enumerate\((.+)\)$/);
-        if (enumMatch) {
-          const vars = enumMatch[1].trim();
-          const target = enumMatch[2].trim();
-          outLines.push(`for (let [${vars}] of py_enumerate(${target}))`);
-          continue;
-        }
-
-        const rangeMatch = codeLine.match(/^for\s+(.+)\s+in\s+range\((.+)\)$/);
-        if (rangeMatch) {
-          const varName = rangeMatch[1].trim();
-          const rangeArgs = rangeMatch[2].trim();
-          outLines.push(`for (let ${varName} of py_range(${rangeArgs}))`);
-          continue;
-        }
-
-        const inMatch = codeLine.match(/^for\s+(.+)\s+in\s+(.+)$/);
-        if (inMatch) {
-          const varName = inMatch[1].trim();
-          const target = inMatch[2].trim();
-          outLines.push(`for (let ${varName} of ${target})`);
-          continue;
-        }
-      }
-
-      if (codeLine.startsWith('while ')) {
-        const cond = codeLine.replace(/^while\s+/, '').trim();
-        outLines.push(`while (${cond})`);
-        continue;
-      }
-
-      if (codeLine.startsWith('if ') || codeLine.startsWith('else if ')) {
-        const isElseIf = codeLine.startsWith('else if ');
-        const cond = codeLine.replace(/^(if|else if)\s+/, '').trim();
-        outLines.push(`${isElseIf ? 'else if' : 'if'} (${cond})`);
-        continue;
-      }
-
-      if (codeLine === 'else') {
-        outLines.push('else');
-        continue;
-      }
-
-      codeLine = codeLine.replace(/([a-zA-Z0-9_$.]+)\s+in\s+([a-zA-Z0-9_$.]+)/g, 'py_in($1, $2)');
-      codeLine = codeLine.replace(/\.append\(/g, '.push(');
-      codeLine = codeLine.replace(/\blen\(([^)]+)\)/g, 'py_len($1)');
-
-      if (codeLine.includes('=') && !codeLine.includes('==') && !codeLine.includes('!=') && !codeLine.includes('<=') && !codeLine.includes('>=')) {
-        const parts = codeLine.split('=');
-        const left = parts[0].trim();
-        if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(left) && !['this', 'self', 'window'].includes(left)) {
-          codeLine = `let ${codeLine}`;
-        }
-      }
-
-      outLines.push(codeLine + ';');
-    }
-
-    while (indentStack.length > 1) {
-      indentStack.pop();
-      outLines.push('}');
-    }
-
-    return outLines.join('\n');
-  }
-
-  evaluateTranspiledJS(jsCode, testCase, problemId) {
-    const py_len = (obj) => (obj == null ? 0 : (Array.isArray(obj) || typeof obj === 'string' ? obj.length : Object.keys(obj).length));
-    const py_range = (a, b, c = 1) => {
-      let start = a, stop = b, step = c;
-      if (stop === undefined) { stop = start; start = 0; }
-      const res = [];
-      if (step > 0) { for (let i = start; i < stop; i += step) res.push(i); }
-      else if (step < 0) { for (let i = start; i > stop; i += step) res.push(i); }
-      return res;
-    };
-    const py_enumerate = (arr) => Array.from(arr).map((v, i) => [i, v]);
-    const py_in = (item, container) => {
-      if (container == null) return false;
-      if (Array.isArray(container) || typeof container === 'string') return container.includes(item);
-      if (typeof container === 'object') return Object.prototype.hasOwnProperty.call(container, item) || item in container;
-      return false;
-    };
-
-    const inputLines = testCase.input.split('\n');
-    const env = {};
-    for (let line of inputLines) {
-      if (line.includes('=')) {
-        const eqIdx = line.indexOf('=');
-        const varName = line.slice(0, eqIdx).trim();
-        const valStr = line.slice(eqIdx + 1).trim();
-        try {
-          env[varName] = JSON.parse(valStr.replace(/'/g, '"'));
-        } catch (e) {
-          env[varName] = valStr;
-        }
-      }
-    }
-
-    const evalFunc = new Function('py_len', 'py_range', 'py_enumerate', 'py_in', 'env', `
-      "use strict";
-      ${Object.keys(env).map(k => `let ${k} = env['${k}'];`).join('\n')}
-      
-      ${jsCode}
-
-      if (typeof Solution !== 'undefined') {
-        const sol = new Solution();
-        if (typeof sol.twoSum === 'function') return sol.twoSum(nums, target);
-        if (typeof sol.reverseString === 'function') {
-          const ret = sol.reverseString(s);
-          return ret !== undefined ? ret : s;
-        }
-        if (typeof sol.isValid === 'function') return sol.isValid(s);
-        if (typeof sol.merge === 'function') {
-          const ret = sol.merge(nums1, m, nums2, n);
-          return ret !== undefined ? ret : nums1;
-        }
-      }
-
-      if (typeof twoSum === 'function') return twoSum(nums, target);
-      if (typeof reverseString === 'function') {
-        const ret = reverseString(s);
-        return ret !== undefined ? ret : s;
-      }
-      if (typeof isValid === 'function') return isValid(s);
-      if (typeof merge === 'function') {
-        const ret = merge(nums1, m, nums2, n);
-        return ret !== undefined ? ret : nums1;
-      }
-
-      if (typeof stack !== 'undefined') return typeof stack.pop === 'function' ? stack.pop() : stack;
-      if (typeof result !== 'undefined') return result;
-      if (typeof ans !== 'undefined') return ans;
-      if (typeof s !== 'undefined') return s;
-      if (typeof nums1 !== 'undefined') return nums1;
-
-      return null;
-    `);
-
-    const gotVal = evalFunc(py_len, py_range, py_enumerate, py_in, env);
-    const gotStr = JSON.stringify(gotVal);
-
-    let expectedStr = testCase.expected.trim();
-    let expectedObj = expectedStr;
-    try {
-      expectedObj = JSON.parse(expectedStr.replace(/'/g, '"'));
-    } catch (e) {}
-
-    const isMatch = (JSON.stringify(gotVal) === JSON.stringify(expectedObj)) || (String(gotVal) === String(expectedStr)) || (gotStr === expectedStr);
-
-    if (isMatch) {
-      return {
-        status: 'CORRECT',
-        got: gotStr,
-        expected: expectedStr
-      };
-    } else {
-      return {
-        status: 'WRONG_ANSWER',
-        got: gotStr,
-        expected: expectedStr
-      };
-    }
-  }
-
-  runCode() {
+  async runCode() {
     const editor = document.getElementById('codelabCodeEditor');
     const code = editor ? editor.value : '';
 
@@ -955,100 +833,163 @@ class CodeLabModule {
       if (outputEl) {
         outputEl.innerHTML = `
           <div style="background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: var(--radius-md); padding: 1rem; color: #ef4444; font-weight: 700; font-size: 0.9rem;">
-            <i class="fa-solid fa-circle-exclamation" style="margin-right: 0.4rem;"></i> Please write your solution first.
+            <i class="fa-solid fa-circle-exclamation" style="margin-right: 0.4rem;"></i> Please write your solution code first.
           </div>
         `;
-      }
-      if (window.app && window.app.showToast) {
-        window.app.showToast('Please write your solution first.', 'circle-exclamation');
       }
       return;
     }
 
     const btn = document.getElementById('codelabRunBtn');
+    const origHtml = btn ? btn.innerHTML : '';
     if (btn) {
       btn.disabled = true;
-      btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Executing Python3 Code...';
+      btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Executing ${this.selectedLanguage}...`;
     }
 
-    setTimeout(() => {
+    this.setRightTab('output');
+    const outputEl = document.getElementById('codelabOutputBody');
+    if (outputEl) {
+      outputEl.innerHTML = `
+        <div style="text-align: center; padding: 2.5rem 1rem; color: var(--text-muted); font-size: 0.9rem;">
+          <i class="fa-solid fa-gear fa-spin" style="font-size: 2rem; color: var(--accent-emerald); margin-bottom: 0.75rem;"></i>
+          <div>Compiling and executing code with <strong>${this.selectedLanguage}</strong> compiler...</div>
+        </div>
+      `;
+    }
+
+    try {
+      const prob = this.problems.find(p => p.id === this.currentProblemId) || this.problems[0];
+      const activeTc = prob.testCases[this.activeTestCaseIndex] || prob.testCases[0];
+
+      const res = await fetch('/api/codelab/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          language: this.selectedLanguage,
+          code,
+          testCases: [activeTc],
+          problemId: prob.id
+        })
+      });
+
+      const data = await res.json();
+      if (!outputEl) return;
+
+      if (!res.ok || !data.success) {
+        outputEl.innerHTML = `
+          <div style="background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: var(--radius-md); padding: 1rem; color: #ef4444;">
+            <div style="font-weight: 800; font-size: 1rem; margin-bottom: 0.35rem;">
+              <i class="fa-solid fa-triangle-exclamation"></i> Execution Error
+            </div>
+            <pre style="background: #1e293b; color: #f87171; padding: 0.75rem 1rem; border-radius: 4px; font-family: monospace; font-size: 0.84rem; line-height: 1.5; margin: 0; white-space: pre-wrap;">${this.escapeHtml(data.error || 'Server failed to execute code.')}</pre>
+          </div>
+        `;
+        return;
+      }
+
+      if (data.status === 'COMPILATION_ERROR') {
+        outputEl.innerHTML = `
+          <div style="background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: var(--radius-md); padding: 1rem; margin-bottom: 1rem;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem;">
+              <span style="font-weight: 800; color: #ef4444; font-size: 1.05rem; display: flex; align-items: center; gap: 0.4rem;">
+                <i class="fa-solid fa-triangle-exclamation"></i> Compilation Error (${data.language})
+              </span>
+              <span style="font-size: 0.75rem; background: #ef4444; color: #fff; padding: 0.15rem 0.55rem; border-radius: 9999px; font-weight: 700;">Build Failed</span>
+            </div>
+            <pre style="background: #1e293b; color: #f87171; padding: 0.75rem 1rem; border-radius: 6px; font-family: monospace; font-size: 0.84rem; line-height: 1.5; margin: 0.5rem 0 0 0; white-space: pre-wrap;">${this.escapeHtml(data.compilerError || 'Compilation failed.')}</pre>
+          </div>
+        `;
+        if (window.app && typeof window.app.notify === 'function') {
+          window.app.notify({
+            title: '⚠️ Compilation Failed',
+            message: `Compilation error in ${data.language}. Please verify your syntax.`,
+            type: 'error',
+            target_page: 'view-codelab'
+          });
+        }
+        return;
+      }
+
+      if (data.status === 'RUNTIME_ERROR') {
+        const firstErr = (data.results && data.results[0] && data.results[0].runtimeError) || 'Runtime Error';
+        outputEl.innerHTML = `
+          <div style="background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: var(--radius-md); padding: 1rem; margin-bottom: 1rem;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem;">
+              <span style="font-weight: 800; color: #d97706; font-size: 1.05rem; display: flex; align-items: center; gap: 0.4rem;">
+                <i class="fa-solid fa-triangle-exclamation"></i> Runtime Error (${data.language})
+              </span>
+              <span style="font-size: 0.75rem; background: #d97706; color: #fff; padding: 0.15rem 0.55rem; border-radius: 9999px; font-weight: 700;">Runtime Exception</span>
+            </div>
+            <pre style="background: #1e293b; color: #fbbf24; padding: 0.75rem 1rem; border-radius: 6px; font-family: monospace; font-size: 0.84rem; line-height: 1.5; margin: 0.5rem 0 0 0; white-space: pre-wrap;">${this.escapeHtml(firstErr)}</pre>
+          </div>
+        `;
+        if (window.app && typeof window.app.notify === 'function') {
+          window.app.notify({
+            title: '⚠️ Runtime Error',
+            message: `Runtime exception encountered in ${data.language}.`,
+            type: 'error',
+            target_page: 'view-codelab'
+          });
+        }
+        return;
+      }
+
+      const singleResult = (data.results && data.results[0]) || {};
+      const isPassed = singleResult.passed;
+
+      if (isPassed) {
+        outputEl.innerHTML = `
+          <div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: var(--radius-md); padding: 1rem; margin-bottom: 1rem;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem;">
+              <span style="font-weight: 800; color: #059669; font-size: 1.05rem; display: flex; align-items: center; gap: 0.4rem;">
+                <i class="fa-solid fa-circle-check"></i> ✓ Correct Answer
+              </span>
+              <span style="font-size: 0.75rem; background: #10b981; color: #fff; padding: 0.15rem 0.55rem; border-radius: 9999px; font-weight: 700;">Passed</span>
+            </div>
+            <div style="font-size: 0.85rem; color: var(--text-primary); margin-top: 0.5rem;">
+              <strong>Output:</strong> <code style="background: #1e293b; color: #38bdf8; padding: 0.2rem 0.5rem; border-radius: 4px;">${this.escapeHtml(singleResult.actual)}</code>
+            </div>
+          </div>
+          <div style="font-size: 0.82rem; font-weight: 700; color: var(--text-muted); margin-bottom: 0.4rem;">Test Case Execution Summary:</div>
+          <pre style="background: #161922; color: #f8fafc; padding: 0.85rem 1rem; border-radius: var(--radius-md); font-family: monospace; font-size: 0.82rem; line-height: 1.5; margin: 0 0 1rem 0;">Test Case ${this.activeTestCaseIndex + 1}: ${this.escapeHtml(String(activeTc.input || '').replace(/\n/g, ' | '))}
+Expected: ${this.escapeHtml(singleResult.expected)} | Got: ${this.escapeHtml(singleResult.actual)} ✓</pre>
+        `;
+      } else {
+        outputEl.innerHTML = `
+          <div style="background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: var(--radius-md); padding: 1rem; margin-bottom: 1rem;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem;">
+              <span style="font-weight: 800; color: #ef4444; font-size: 1.05rem; display: flex; align-items: center; gap: 0.4rem;">
+                <i class="fa-solid fa-circle-xmark"></i> ✗ Wrong Answer
+              </span>
+              <span style="font-size: 0.75rem; background: #ef4444; color: #fff; padding: 0.15rem 0.55rem; border-radius: 9999px; font-weight: 700;">Failed</span>
+            </div>
+            <div style="font-size: 0.85rem; font-family: monospace; line-height: 1.6; margin-top: 0.5rem;">
+              <div style="margin-bottom: 0.25rem;"><strong>Your Output:</strong></div>
+              <pre style="background: #1e293b; color: #f87171; padding: 0.5rem 0.75rem; border-radius: 4px; margin: 0 0 0.75rem 0;">${this.escapeHtml(singleResult.actual || '(no output)')}</pre>
+              <div style="margin-bottom: 0.25rem;"><strong>Expected Output:</strong></div>
+              <pre style="background: #1e293b; color: #4ade80; padding: 0.5rem 0.75rem; border-radius: 4px; margin: 0;">${this.escapeHtml(singleResult.expected)}</pre>
+            </div>
+          </div>
+        `;
+      }
+    } catch (err) {
+      if (outputEl) {
+        outputEl.innerHTML = `
+          <div style="background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: var(--radius-md); padding: 1rem; color: #ef4444;">
+            <i class="fa-solid fa-triangle-exclamation"></i> Network / Server error: ${this.escapeHtml(err.message)}
+          </div>
+        `;
+      }
+    } finally {
       if (btn) {
         btn.disabled = false;
-        btn.innerHTML = '<i class="fa-solid fa-play"></i> Run Code <span style="font-size: 0.72rem; opacity: 0.8; margin-left: 0.25rem;">(Ctrl + Enter)</span>';
+        btn.innerHTML = origHtml || '<i class="fa-solid fa-play"></i> Run Code <span style="font-size: 0.72rem; opacity: 0.8; margin-left: 0.25rem;">(Ctrl + Enter)</span>';
       }
-
-      this.setRightTab('output');
-      const prob = this.problems.find(p => p.id === this.currentProblemId) || this.problems[0];
-      const tc = prob.testCases[this.activeTestCaseIndex] || prob.testCases[0];
-
-      const res = this.executePython3(code, tc, prob.id);
-      const outputEl = document.getElementById('codelabOutputBody');
-
-      if (outputEl) {
-        if (res.status === 'CORRECT') {
-          outputEl.innerHTML = `
-            <div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: var(--radius-md); padding: 1rem; margin-bottom: 1rem;">
-              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem;">
-                <span style="font-weight: 800; color: #059669; font-size: 1.05rem; display: flex; align-items: center; gap: 0.4rem;">
-                  <i class="fa-solid fa-circle-check"></i> ✓ Correct Answer
-                </span>
-                <span style="font-size: 0.75rem; background: #10b981; color: #fff; padding: 0.15rem 0.55rem; border-radius: 9999px; font-weight: 700;">
-                  Passed
-                </span>
-              </div>
-              <div style="font-size: 0.85rem; color: var(--text-primary); margin-top: 0.5rem;">
-                <strong>Output:</strong> <code style="background: #1e293b; color: #38bdf8; padding: 0.2rem 0.5rem; border-radius: 4px;">${res.got}</code>
-              </div>
-            </div>
-            <div style="font-size: 0.82rem; font-weight: 700; color: var(--text-muted); margin-bottom: 0.4rem;">Test Case Execution Summary:</div>
-            <pre style="background: #161922; color: #f8fafc; padding: 0.85rem 1rem; border-radius: var(--radius-md); font-family: monospace; font-size: 0.82rem; line-height: 1.5; margin: 0 0 1rem 0;">Test Case ${this.activeTestCaseIndex + 1}: ${tc.input.replace(/\n/g, ' | ')}
-Expected: ${res.expected} | Got: ${res.got} ✓</pre>
-          `;
-          if (window.app && window.app.showToast) {
-            window.app.showToast('✓ Correct Answer!', 'circle-check');
-          }
-        } else if (res.status === 'WRONG_ANSWER') {
-          outputEl.innerHTML = `
-            <div style="background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: var(--radius-md); padding: 1rem; margin-bottom: 1rem;">
-              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem;">
-                <span style="font-weight: 800; color: #ef4444; font-size: 1.05rem; display: flex; align-items: center; gap: 0.4rem;">
-                  <i class="fa-solid fa-circle-xmark"></i> ✗ Wrong Answer
-                </span>
-                <span style="font-size: 0.75rem; background: #ef4444; color: #fff; padding: 0.15rem 0.55rem; border-radius: 9999px; font-weight: 700;">
-                  Failed
-                </span>
-              </div>
-              <div style="font-size: 0.85rem; font-family: monospace; line-height: 1.6; margin-top: 0.5rem;">
-                <div style="margin-bottom: 0.25rem;"><strong>Your Output:</strong></div>
-                <pre style="background: #1e293b; color: #f87171; padding: 0.5rem 0.75rem; border-radius: 4px; margin: 0 0 0.75rem 0;">${res.got}</pre>
-                <div style="margin-bottom: 0.25rem;"><strong>Expected Output:</strong></div>
-                <pre style="background: #1e293b; color: #4ade80; padding: 0.5rem 0.75rem; border-radius: 4px; margin: 0;">${res.expected}</pre>
-              </div>
-            </div>
-          `;
-          if (window.app && window.app.showToast) {
-            window.app.showToast('✗ Wrong Answer', 'circle-xmark');
-          }
-        } else {
-          outputEl.innerHTML = `
-            <div style="background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: var(--radius-md); padding: 1rem; margin-bottom: 1rem;">
-              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem;">
-                <span style="font-weight: 800; color: #d97706; font-size: 1.05rem; display: flex; align-items: center; gap: 0.4rem;">
-                  <i class="fa-solid fa-triangle-exclamation"></i> Runtime Error
-                </span>
-              </div>
-              <pre style="background: #1e293b; color: #fbbf24; padding: 0.75rem 1rem; border-radius: 4px; font-family: monospace; font-size: 0.84rem; line-height: 1.5; margin: 0.5rem 0 0 0; white-space: pre-wrap;">${res.output}</pre>
-            </div>
-          `;
-          if (window.app && window.app.showToast) {
-            window.app.showToast('Runtime Error', 'triangle-exclamation');
-          }
-        }
-      }
-    }, 400);
+    }
   }
 
-  submitSolution() {
+  async submitSolution() {
     const editor = document.getElementById('codelabCodeEditor');
     const code = editor ? editor.value : '';
 
@@ -1058,115 +999,160 @@ Expected: ${res.expected} | Got: ${res.got} ✓</pre>
       if (outputEl) {
         outputEl.innerHTML = `
           <div style="background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: var(--radius-md); padding: 1rem; color: #ef4444; font-weight: 700; font-size: 0.9rem;">
-            <i class="fa-solid fa-circle-exclamation" style="margin-right: 0.4rem;"></i> Please write your solution first.
+            <i class="fa-solid fa-circle-exclamation" style="margin-right: 0.4rem;"></i> Please write your solution code first.
           </div>
         `;
-      }
-      if (window.app && window.app.showToast) {
-        window.app.showToast('Please write your solution first.', 'circle-exclamation');
       }
       return;
     }
 
     const btn = document.getElementById('codelabSubmitBtn');
+    const origHtml = btn ? btn.innerHTML : '';
     if (btn) {
       btn.disabled = true;
-      btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Evaluating Solution...';
+      btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Evaluating All Test Cases...';
     }
 
-    setTimeout(() => {
+    this.setRightTab('output');
+    const outputEl = document.getElementById('codelabOutputBody');
+    if (outputEl) {
+      outputEl.innerHTML = `
+        <div style="text-align: center; padding: 2.5rem 1rem; color: var(--text-muted); font-size: 0.9rem;">
+          <i class="fa-solid fa-gear fa-spin" style="font-size: 2rem; color: var(--accent-emerald); margin-bottom: 0.75rem;"></i>
+          <div>Running all test cases with <strong>${this.selectedLanguage}</strong> compiler...</div>
+        </div>
+      `;
+    }
+
+    try {
+      const prob = this.problems.find(p => p.id === this.currentProblemId) || this.problems[0];
+
+      const res = await fetch('/api/codelab/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          language: this.selectedLanguage,
+          code,
+          testCases: prob.testCases,
+          problemId: prob.id
+        })
+      });
+
+      const data = await res.json();
+      if (!outputEl) return;
+
+      if (!res.ok || !data.success) {
+        outputEl.innerHTML = `
+          <div style="background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: var(--radius-md); padding: 1rem; color: #ef4444;">
+            <div style="font-weight: 800; font-size: 1rem; margin-bottom: 0.35rem;">
+              <i class="fa-solid fa-triangle-exclamation"></i> Evaluation Error
+            </div>
+            <pre style="background: #1e293b; color: #f87171; padding: 0.75rem 1rem; border-radius: 4px; font-family: monospace; font-size: 0.84rem; line-height: 1.5; margin: 0; white-space: pre-wrap;">${this.escapeHtml(data.error || 'Server failed to evaluate submission.')}</pre>
+          </div>
+        `;
+        return;
+      }
+
+      if (data.status === 'COMPILATION_ERROR') {
+        outputEl.innerHTML = `
+          <div style="background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: var(--radius-md); padding: 1rem; margin-bottom: 1rem;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem;">
+              <span style="font-weight: 800; color: #ef4444; font-size: 1.05rem; display: flex; align-items: center; gap: 0.4rem;">
+                <i class="fa-solid fa-triangle-exclamation"></i> Compilation Error (${data.language})
+              </span>
+              <span style="font-size: 0.75rem; background: #ef4444; color: #fff; padding: 0.15rem 0.55rem; border-radius: 9999px; font-weight: 700;">Build Failed</span>
+            </div>
+            <pre style="background: #1e293b; color: #f87171; padding: 0.75rem 1rem; border-radius: 6px; font-family: monospace; font-size: 0.84rem; line-height: 1.5; margin: 0.5rem 0 0 0; white-space: pre-wrap;">${this.escapeHtml(data.compilerError || 'Compilation failed.')}</pre>
+          </div>
+        `;
+        if (window.app && typeof window.app.notify === 'function') {
+          window.app.notify({
+            title: '⚠️ Compilation Error',
+            message: `Submission failed due to a compiler error in ${data.language}.`,
+            type: 'error',
+            target_page: 'view-codelab'
+          });
+        }
+        return;
+      }
+
+      if (data.allPassed) {
+        if (!this.submittedProblemIds.has(prob.id)) {
+          this.submittedProblemIds.add(prob.id);
+          this.solvedCount++;
+        }
+        const progEl = document.getElementById('codelabSolvedCountText');
+        if (progEl) progEl.textContent = `${this.solvedCount} Solved`;
+
+        outputEl.innerHTML = `
+          <div style="background: linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(5, 150, 105, 0.05)); border: 1.5px solid #10b981; border-radius: var(--radius-lg); padding: 1.25rem; text-align: center; margin-bottom: 1rem;">
+            <div style="font-size: 2.2rem; margin-bottom: 0.4rem;">🎉</div>
+            <h3 style="font-size: 1.25rem; font-weight: 800; color: #059669; margin: 0 0 0.35rem 0;">Solution Accepted & Submitted!</h3>
+            <p style="font-size: 0.85rem; color: var(--text-secondary); margin: 0 0 0.85rem 0;">
+              All ${data.passedCount}/${data.totalCount} test cases passed successfully in <strong>${data.language}</strong>!
+            </p>
+            <div style="display: inline-flex; align-items: center; gap: 0.5rem; background: #10b981; color: #ffffff; padding: 0.35rem 0.9rem; border-radius: 9999px; font-weight: 800; font-size: 0.82rem;">
+              <i class="fa-solid fa-check"></i> Accepted (${data.language})
+            </div>
+          </div>
+        `;
+
+        if (window.app && typeof window.app.notify === 'function') {
+          window.app.notify({
+            title: '🏆 Challenge Solved & Accepted!',
+            message: `You successfully solved "${prob.title}" using ${this.selectedLanguage}!`,
+            type: 'award',
+            target_page: 'view-codelab'
+          });
+        }
+
+        setTimeout(() => {
+          this.backToProblems();
+        }, 1500);
+      } else {
+        const failedItem = (data.results && data.results.find(r => !r.passed)) || {};
+        outputEl.innerHTML = `
+          <div style="background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: var(--radius-md); padding: 1rem; margin-bottom: 1rem;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem;">
+              <span style="font-weight: 800; color: #ef4444; font-size: 1.05rem; display: flex; align-items: center; gap: 0.4rem;">
+                <i class="fa-solid fa-circle-xmark"></i> ✗ Wrong Answer (${data.passedCount}/${data.totalCount} passed)
+              </span>
+              <span style="font-size: 0.75rem; background: #ef4444; color: #fff; padding: 0.15rem 0.55rem; border-radius: 9999px; font-weight: 700;">
+                Failed Case ${failedItem.caseIndex || 1}
+              </span>
+            </div>
+            <div style="font-size: 0.85rem; font-family: monospace; line-height: 1.6; margin-top: 0.5rem;">
+              <div style="margin-bottom: 0.25rem;"><strong>Your Output:</strong></div>
+              <pre style="background: #1e293b; color: #f87171; padding: 0.5rem 0.75rem; border-radius: 4px; margin: 0 0 0.75rem 0;">${this.escapeHtml(failedItem.actual || '(no output)')}</pre>
+              <div style="margin-bottom: 0.25rem;"><strong>Expected Output:</strong></div>
+              <pre style="background: #1e293b; color: #4ade80; padding: 0.5rem 0.75rem; border-radius: 4px; margin: 0;">${this.escapeHtml(failedItem.expected)}</pre>
+            </div>
+          </div>
+        `;
+        if (window.app && typeof window.app.notify === 'function') {
+          window.app.notify({
+            title: '❌ Test Case Failed',
+            message: `Solution did not pass test case ${failedItem.caseIndex || 1} in ${this.selectedLanguage}.`,
+            type: 'error',
+            target_page: 'view-codelab'
+          });
+        }
+      }
+    } catch (err) {
+      if (outputEl) {
+        outputEl.innerHTML = `
+          <div style="background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: var(--radius-md); padding: 1rem; color: #ef4444;">
+            <i class="fa-solid fa-triangle-exclamation"></i> Network / Server error: ${this.escapeHtml(err.message)}
+          </div>
+        `;
+      }
+    } finally {
       if (btn) {
         btn.disabled = false;
-        btn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Submit Solution';
+        btn.innerHTML = origHtml || '<i class="fa-solid fa-paper-plane"></i> Submit Solution';
       }
-
-      this.setRightTab('output');
-      const prob = this.problems.find(p => p.id === this.currentProblemId) || this.problems[0];
-      
-      let allPassed = true;
-      let firstFailure = null;
-
-      for (let i = 0; i < prob.testCases.length; i++) {
-        const tc = prob.testCases[i];
-        const res = this.executePython3(code, tc, prob.id);
-        if (res.status !== 'CORRECT') {
-          allPassed = false;
-          firstFailure = { tcIndex: i + 1, tc, res };
-          break;
-        }
-      }
-
-      const outputEl = document.getElementById('codelabOutputBody');
-      if (outputEl) {
-        if (allPassed) {
-          if (!this.submittedProblemIds.has(prob.id)) {
-            this.submittedProblemIds.add(prob.id);
-            this.solvedCount++;
-          }
-          const progEl = document.getElementById('codelabSolvedCountText');
-          if (progEl) progEl.textContent = `${this.solvedCount} Solved`;
-
-          outputEl.innerHTML = `
-            <div style="background: linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(5, 150, 105, 0.05)); border: 1.5px solid #10b981; border-radius: var(--radius-lg); padding: 1.25rem; text-align: center; margin-bottom: 1rem;">
-              <div style="font-size: 2.2rem; margin-bottom: 0.4rem;">🎉</div>
-              <h3 style="font-size: 1.25rem; font-weight: 800; color: #059669; margin: 0 0 0.35rem 0;">Solution Accepted & Submitted!</h3>
-              <p style="font-size: 0.85rem; color: var(--text-secondary); margin: 0 0 0.85rem 0;">
-                Great work! You solved <strong>${prob.title}</strong>. Redirecting to problems list...
-              </p>
-              <div style="display: inline-flex; align-items: center; gap: 0.5rem; background: #10b981; color: #ffffff; padding: 0.35rem 0.9rem; border-radius: 9999px; font-weight: 800; font-size: 0.82rem;">
-                <i class="fa-solid fa-check"></i> Redirecting...
-              </div>
-            </div>
-          `;
-          if (window.app && window.app.showToast) {
-            window.app.showToast(`🎉 Solution Accepted & Submitted! Redirecting...`, 'trophy');
-          }
-
-          setTimeout(() => {
-            this.backToProblems();
-          }, 1200);
-        } else if (firstFailure.res.status === 'WRONG_ANSWER') {
-          outputEl.innerHTML = `
-            <div style="background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: var(--radius-md); padding: 1rem; margin-bottom: 1rem;">
-              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem;">
-                <span style="font-weight: 800; color: #ef4444; font-size: 1.05rem; display: flex; align-items: center; gap: 0.4rem;">
-                  <i class="fa-solid fa-circle-xmark"></i> ✗ Wrong Answer
-                </span>
-                <span style="font-size: 0.75rem; background: #ef4444; color: #fff; padding: 0.15rem 0.55rem; border-radius: 9999px; font-weight: 700;">
-                  Failed on Test Case ${firstFailure.tcIndex}
-                </span>
-              </div>
-              <div style="font-size: 0.85rem; font-family: monospace; line-height: 1.6; margin-top: 0.5rem;">
-                <div style="margin-bottom: 0.25rem;"><strong>Your Output:</strong></div>
-                <pre style="background: #1e293b; color: #f87171; padding: 0.5rem 0.75rem; border-radius: 4px; margin: 0 0 0.75rem 0;">${firstFailure.res.got}</pre>
-                <div style="margin-bottom: 0.25rem;"><strong>Expected Output:</strong></div>
-                <pre style="background: #1e293b; color: #4ade80; padding: 0.5rem 0.75rem; border-radius: 4px; margin: 0;">${firstFailure.res.expected}</pre>
-              </div>
-            </div>
-          `;
-          if (window.app && window.app.showToast) {
-            window.app.showToast(`✗ Wrong Answer on Test Case ${firstFailure.tcIndex}`, 'circle-xmark');
-          }
-        } else {
-          outputEl.innerHTML = `
-            <div style="background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: var(--radius-md); padding: 1rem; margin-bottom: 1rem;">
-              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem;">
-                <span style="font-weight: 800; color: #d97706; font-size: 1.05rem; display: flex; align-items: center; gap: 0.4rem;">
-                  <i class="fa-solid fa-triangle-exclamation"></i> Runtime Error
-                </span>
-                <span style="font-size: 0.75rem; background: #d97706; color: #fff; padding: 0.15rem 0.55rem; border-radius: 9999px; font-weight: 700;">
-                  Test Case ${firstFailure.tcIndex}
-                </span>
-              </div>
-              <pre style="background: #1e293b; color: #fbbf24; padding: 0.75rem 1rem; border-radius: 4px; font-family: monospace; font-size: 0.84rem; line-height: 1.5; margin: 0.5rem 0 0 0; white-space: pre-wrap;">${firstFailure.res.output}</pre>
-            </div>
-          `;
-          if (window.app && window.app.showToast) {
-            window.app.showToast('Runtime Error', 'triangle-exclamation');
-          }
-        }
-      }
-    }, 500);
+    }
+  }
   }
 
   render() {
@@ -1414,7 +1400,7 @@ Expected: ${res.expected} | Got: ${res.got} ✓</pre>
         </div>
 
         <div style="text-align: center; margin: 1.5rem 0;">
-          <button class="btn btn-secondary btn-sm" style="border-radius: var(--radius-full); font-weight: 700; padding: 0.45rem 1.5rem;" onclick="window.app.showToast('All available curated problems loaded.', 'check')">
+          <button class="btn btn-secondary btn-sm" style="border-radius: var(--radius-full); font-weight: 700; padding: 0.45rem 1.5rem;" onclick="window.app.notify({ title: '📚 Curated Problems', message: 'All available curated problems are loaded.', type: 'info', target_page: 'view-codelab' })">
             Show More Problems <i class="fa-solid fa-chevron-down" style="margin-left: 0.35rem;"></i>
           </button>
         </div>
@@ -1438,7 +1424,7 @@ Expected: ${res.expected} | Got: ${res.got} ✓</pre>
 
   renderIdeView(container) {
     const prob = this.problems.find(p => p.id === this.currentProblemId) || this.problems[0];
-    const starterCode = prob.starterCode[this.selectedLanguage] || '';
+    const starterCode = this.getStarterCode(prob, this.selectedLanguage);
 
     container.innerHTML = `
       <div class="codelab-ide-wrapper">
@@ -1486,7 +1472,11 @@ Expected: ${res.expected} | Got: ${res.got} ✓</pre>
           <div class="codelab-pane codelab-editor-pane">
             <div class="codelab-editor-header">
               <select class="codelab-lang-select" onchange="window.codelab.setLanguage(this.value)">
-                <option value="python3" selected>Python3</option>
+                <option value="python3" ${this.selectedLanguage === 'python3' ? 'selected' : ''}>Python (Python 3)</option>
+                <option value="java" ${this.selectedLanguage === 'java' ? 'selected' : ''}>Java (OpenJDK 21)</option>
+                <option value="cpp" ${this.selectedLanguage === 'cpp' ? 'selected' : ''}>C++ (GCC 13)</option>
+                <option value="c" ${this.selectedLanguage === 'c' ? 'selected' : ''}>C (GCC 13)</option>
+                <option value="javascript" ${this.selectedLanguage === 'javascript' ? 'selected' : ''}>JavaScript (Node.js)</option>
               </select>
 
               <button class="codelab-editor-reset-btn" onclick="window.codelab.resetCode()">
@@ -1496,7 +1486,7 @@ Expected: ${res.expected} | Got: ${res.got} ✓</pre>
 
             <div class="codelab-code-area-container">
               <div id="codelabLineNumbers" class="codelab-line-numbers">1<br>2<br>3<br>4<br>5<br>6<br>7<br>8<br>9<br>10</div>
-              <textarea id="codelabCodeEditor" class="codelab-code-textarea" spellcheck="false" oninput="window.codelab.updateLineNumbers()"></textarea>
+              <textarea id="codelabCodeEditor" class="codelab-code-textarea" spellcheck="false" oninput="window.codelab.updateLineNumbers()">${this.escapeHtml(starterCode)}</textarea>
             </div>
           </div>
 

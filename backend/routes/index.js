@@ -19,6 +19,7 @@ const supportRoutes = require('./supportRoutes');
 const masterclassRoutes = require('./masterclassRoutes');
 const bookingRoutes = require('./bookingRoutes');
 const notificationRoutes = require('./notificationRoutes');
+const codelabRoutes = require('./codelabRoutes');
 
 // API Health Check
 router.get('/health', (req, res) => {
@@ -50,7 +51,20 @@ router.use('/certificates', certificateRoutes);
 router.use('/reviews', reviewRoutes);
 router.use('/transactions', transactionRoutes);
 router.use('/support', supportRoutes);
+router.use('/tickets', supportRoutes);
+router.use('/doubts', supportRoutes);
+router.use('/support-tickets', supportRoutes);
 router.use('/booking', bookingRoutes);
 router.use('/notifications', notificationRoutes);
+router.use('/codelab', codelabRoutes);
+
+// Catch-all for undefined API routes (ALWAYS return JSON, NEVER HTML)
+router.all('*', (req, res) => {
+  res.status(404).json({
+    success: false,
+    message: `API route not found: ${req.method} ${req.originalUrl}`,
+    error: `API route not found: ${req.method} ${req.originalUrl}`
+  });
+});
 
 module.exports = router;

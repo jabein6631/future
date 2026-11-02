@@ -117,6 +117,7 @@
       await this.renderAll();
       this.startSessionTimer();
       this.startSidebarBadgesPolling();
+      this.startMasterclassCountdownTicker();
     },
 
     // ==========================================
@@ -201,16 +202,22 @@
       // 3. Notifications Dropdown
       const notifBtn = document.getElementById('notifBellBtn');
       const notifDropdown = document.getElementById('notifDropdown');
-      notifBtn?.addEventListener('click', (e) => {
+      notifBtn?.addEventListener('click', async (e) => {
         e.stopPropagation();
-        notifDropdown.classList.toggle('show');
+        if (notifDropdown) {
+          const willOpen = !notifDropdown.classList.contains('show');
+          if (willOpen) {
+            await this.renderNotifications(true);
+            notifDropdown.classList.add('show');
+          } else {
+            notifDropdown.classList.remove('show');
+          }
+        }
       });
 
-      document.getElementById('markAllReadBtn')?.addEventListener('click', () => {
-        (window.store.notifications || []).forEach(n => n.unread = false);
-        this.renderNavbar();
-        this.renderNotifications();
-        this.showToast('All notifications marked as read', 'check');
+      document.getElementById('markAllReadBtn')?.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await this.markAllNotificationsRead();
       });
 
       document.addEventListener('click', (e) => {
@@ -400,11 +407,26 @@
           this.restorePageScroll();
 
           if (isCohort) {
-            this.showToast('Masterclass cancelled successfully.', 'info');
+            this.notify({
+              title: '🗓️ Masterclass Cancelled',
+              message: 'Masterclass cancelled successfully. Registered participants notified.',
+              type: 'info',
+              target_page: 'view-sessions'
+            });
           } else if (isPending) {
-            this.showToast('Session request cancelled successfully. Escrow credits refunded to your wallet.', 'info');
+            this.notify({
+              title: '🗓️ Session Request Cancelled',
+              message: 'Session request cancelled successfully. Escrow credits refunded to your wallet.',
+              type: 'info',
+              target_page: 'view-sessions'
+            });
           } else {
-            this.showToast('Session cancelled. Locked credits have been refunded to wallet.', 'info');
+            this.notify({
+              title: '🗓️ Session Cancelled',
+              message: 'Session cancelled. Locked credits have been refunded to your wallet.',
+              type: 'info',
+              target_page: 'view-sessions'
+            });
           }
 
           await window.store.fetchSessions();
@@ -1059,6 +1081,8 @@
 
       // Step 1: Request OTP via email (with in-flight lock to guarantee single request)
       let isRequestingOtp = false;
+      let activeForgotEmail = '';
+      let activeForgotUserId = '';
       const handleRequestOtp = async (e) => {
         if (e) e.preventDefault();
         if (isRequestingOtp) return;
@@ -1083,13 +1107,17 @@
           const response = await fetch('/api/auth/forgot-password', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email })
+            body: JSON.stringify({ email, emailOrId: email })
           });
           const data = await response.json();
 
           if (!data.success) {
             throw new Error(data.error || 'Failed to send verification code.');
           }
+
+          if (data.email) activeForgotEmail = data.email;
+          if (data.userId) activeForgotUserId = data.userId;
+          if (data.requestId) activeForgotRequestId = data.requestId;
 
           // Advance to Step 2 (OTP Entry) - strictly NEVER reveal OTP
           if (forgotStep1) forgotStep1.style.display = 'none';
@@ -1132,16 +1160,20 @@
           resendOtpBtn.style.pointerEvents = 'none';
           resendOtpBtn.textContent = 'Sending...';
 
+          const emailToSend = activeForgotEmail || email;
           const response = await fetch('/api/auth/resend-reset-otp', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email })
+            body: JSON.stringify({ email: emailToSend, emailOrId: email, userId: activeForgotUserId })
           });
           const data = await response.json();
 
           if (!data.success) {
             throw new Error(data.error || 'Failed to resend code.');
           }
+
+          if (data.email) activeForgotEmail = data.email;
+          if (data.userId) activeForgotUserId = data.userId;
 
           startResendCooldown(30);
           clearOtpBoxes();
@@ -1189,16 +1221,26 @@
           verifyOtpBtn.disabled = true;
           verifyOtpBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> <span>Verifying...</span>`;
 
+          const emailToSend = activeForgotEmail || email;
           const response = await fetch('/api/auth/verify-reset-otp', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, otp })
+            body: JSON.stringify({
+              email: emailToSend,
+              emailOrId: email,
+              userId: activeForgotUserId,
+              requestId: activeForgotRequestId,
+              otp
+            })
           });
           const data = await response.json();
 
           if (!data.success) {
             throw new Error(data.error || 'Invalid or expired verification code.');
           }
+
+          if (data.email) activeForgotEmail = data.email;
+          if (data.userId) activeForgotUserId = data.userId;
 
           // OTP is verified! Store short-lived resetToken and advance to Step 3
           currentResetToken = data.resetToken;
@@ -1291,11 +1333,14 @@
             submitBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> <span>Updating Password...</span>`;
           }
 
+          const emailToSend = activeForgotEmail || email;
           const response = await fetch('/api/auth/reset-password', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              email,
+              email: emailToSend,
+              emailOrId: email,
+              userId: activeForgotUserId,
               resetToken: currentResetToken,
               newPassword,
               confirmPassword
@@ -1927,7 +1972,12 @@
                 </div>
               `;
             }
-            this.showToast(`❌ Verification Result: NOT VERIFIED. Upload rejected (0 Credits).`, 'lock');
+            this.notify({
+              title: '❌ Certificate Verification Failed',
+              message: `Verification Result: NOT VERIFIED. Upload rejected (${aiReport?.reason || 'Invalid certificate'}).`,
+              type: 'error',
+              target_page: 'view-upload-cert'
+            });
             if (window.store?.fetchCertificates) await window.store.fetchCertificates(current.id);
             await window.store.init();
             this.renderAll();
@@ -1936,7 +1986,12 @@
           }
 
           if (aiReport.result === 'NEEDS MANUAL VERIFICATION' || data.status === 'NEEDS_MANUAL_REVIEW') {
-            this.showToast(`⚠️ Verification Result: NEEDS MANUAL REVIEW. Queued for Faculty Audit.`, 'user');
+            this.notify({
+              title: '⏳ Certificate Under Review',
+              message: 'Verification Result: NEEDS MANUAL REVIEW. Queued for Faculty Audit.',
+              type: 'warning',
+              target_page: 'view-upload-cert'
+            });
             await window.store.init();
             this.renderAll();
             this.loadCertificateStatusUI();
@@ -1944,7 +1999,12 @@
           }
 
           // Case: VERIFIED
-          this.showToast(`🎉 Certificate VERIFIED! You are now an authorized Tutor! +${data.bonusCredits || 2.0} Credits deposited!`, 'award');
+          this.notify({
+            title: '🎉 Certificate Verified! You are now an Eligible Tutor',
+            message: `Certificate VERIFIED! You are now an authorized Tutor! +${data.bonusCredits || 2.0} Credits deposited.`,
+            type: 'award',
+            target_page: 'view-upload-cert'
+          });
 
           await window.store.init();
           this.renderAll();
@@ -2556,11 +2616,26 @@
           const isVerif = !isNotVerif && !isReview && (data.status === 'VERIFIED' || data.result === 'REAL' || data.result === 'VERIFIED');
 
           if (isNotVerif) {
-            this.showToast(`❌ Verification Result: NOT VERIFIED. Not eligible to teach.`, 'lock');
+            this.notify({
+              title: '❌ Certificate Verification Failed',
+              message: `Certificate for "${courseName}" could not be verified. Not eligible to teach until valid certificate is provided.`,
+              type: 'error',
+              target_page: 'view-upload-cert'
+            });
           } else if (isReview) {
-            this.showToast('⚠️ Verification Result: NEEDS REVIEW. Queued for Faculty Review.', 'user');
+            this.notify({
+              title: '⏳ Certificate Under Review',
+              message: `Certificate for "${courseName}" has been submitted and queued for Faculty Manual Review.`,
+              type: 'warning',
+              target_page: 'view-upload-cert'
+            });
           } else {
-            this.showToast(`🎉 Certificate VERIFIED! Eligible to teach & Tutor Tier unlocked!`, 'award');
+            this.notify({
+              title: '🎉 Certificate Verified! You are now an Eligible Tutor',
+              message: `Your ${selectedPlatform} certificate for "${courseName}" was verified successfully! Tutor Tier unlocked.`,
+              type: 'award',
+              target_page: 'view-upload-cert'
+            });
           }
 
           // Reload certificate status card UI
@@ -3616,11 +3691,44 @@
     bookingSubjectsCache: [],
 
     bindBookingFlowEvents() {
-      // Step 1: Mentor Search
+      // Step 1: Mentor Search & Quick Filters
       const mentorSearch = document.getElementById('bookingMentorSearchInput');
       mentorSearch?.addEventListener('input', (e) => {
         this.filterBookingMentors(e.target.value);
       });
+
+      const filterBar = document.getElementById('bookingMentorFilterBar');
+      filterBar?.addEventListener('click', (e) => {
+        const btn = e.target.closest('.btn-mentor-filter');
+        if (!btn) return;
+        filterBar.querySelectorAll('.btn-mentor-filter').forEach(b => {
+          b.classList.remove('active');
+          b.style.background = '#fff';
+          b.style.borderColor = '#cbd5e1';
+          const t = b.dataset.filterTier;
+          if (t === 'elite') b.style.color = '#b45309';
+          else if (t === 'advanced') b.style.color = '#0284c7';
+          else if (t === 'silver') b.style.color = '#475569';
+          else if (t === 'bronze') b.style.color = '#92400e';
+          else if (t === 'available') b.style.color = '#16a34a';
+          else b.style.color = '#475569';
+        });
+        btn.classList.add('active');
+        btn.style.background = '#2563eb';
+        btn.style.borderColor = '#2563eb';
+        btn.style.color = '#fff';
+
+        this.activeMentorTierFilter = btn.dataset.filterTier || 'all';
+        const q = mentorSearch?.value || '';
+        this.filterBookingMentors(q, this.activeMentorTierFilter);
+      });
+
+      document.getElementById('bookingMentorFilterBtn')?.addEventListener('click', () => {
+        if (filterBar) {
+          filterBar.style.display = (filterBar.style.display === 'none') ? 'flex' : 'none';
+        }
+      });
+
       document.getElementById('btnCancelBookingStep1')?.addEventListener('click', () => {
         this.switchView('view-sessions');
         history.pushState(null, '', '/sessions');
@@ -3932,15 +4040,34 @@
       const listContainer = document.getElementById('bookingMentorCardsList');
       if (!listContainer) return;
 
-      listContainer.innerHTML = `<div style="text-align: center; padding: 2rem; color: #94a3b8;"><i class="fa-solid fa-spinner fa-spin"></i> Loading available mentors...</div>`;
+      listContainer.innerHTML = `
+        <div style="text-align: center; padding: 2.5rem 1rem; color: #64748b;">
+          <i class="fa-solid fa-circle-notch fa-spin" style="font-size: 1.5rem; color: #2563eb; margin-bottom: 0.6rem; display: block;"></i>
+          <span style="font-weight: 600; font-size: 0.92rem;">Fetching eligible verified mentors from database...</span>
+        </div>
+      `;
 
       try {
+        const headers = (window.store && typeof window.store.getAuthHeaders === 'function')
+          ? window.store.getAuthHeaders()
+          : { 'Content-Type': 'application/json' };
+
+        const currentPersona = window.store?.getCurrentPersona?.() || window.store?.currentUser || {};
+        const currentUserId = currentPersona.id || sessionStorage.getItem('user_id');
+
         const res = await fetch('/api/booking/mentors', {
-          headers: { Authorization: `Bearer ${window.store.token}` }
+          headers: Object.assign({}, headers, currentUserId ? { 'x-user-id': currentUserId } : {})
         });
+
+        if (!res.ok) {
+          throw new Error(`Server returned HTTP ${res.status}`);
+        }
+
         const data = await res.json();
-        const currentUserId = window.store.getCurrentPersona()?.id;
-        this.bookingMentorsCache = (data.mentors || []).filter(m => m.id !== currentUserId);
+        const rawMentors = data.mentors || [];
+
+        // Exclude currently logged in user
+        this.bookingMentorsCache = rawMentors.filter(m => m.id !== currentUserId && m.email !== currentPersona.email);
 
         // If a mentor is already pre-selected in this.bookingState, ensure they exist and appear at top
         if (this.bookingState.mentor) {
@@ -3949,30 +4076,54 @@
             this.bookingState.mentor = Object.assign({}, this.bookingMentorsCache[idx], this.bookingState.mentor);
             const [selected] = this.bookingMentorsCache.splice(idx, 1);
             this.bookingMentorsCache.unshift(selected);
-          } else {
+          } else if (this.bookingState.mentor.id !== currentUserId) {
             this.bookingMentorsCache.unshift(this.bookingState.mentor);
           }
         }
 
-        this.renderBookingMentorCards(this.bookingMentorsCache);
+        this.filterBookingMentors();
       } catch (err) {
         console.error('Error loading mentors:', err);
-        listContainer.innerHTML = `<div style="color: #ef4444; padding: 1rem;">Failed to load mentors.</div>`;
+        listContainer.innerHTML = `
+          <div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 10px; padding: 1.5rem; color: #991b1b; text-align: center;">
+            <i class="fa-solid fa-triangle-exclamation" style="font-size: 1.4rem; margin-bottom: 0.5rem; display: block;"></i>
+            <div style="font-weight: 700; margin-bottom: 0.35rem;">Could not load eligible mentors from database</div>
+            <div style="font-size: 0.85rem; color: #b91c1c; margin-bottom: 0.75rem;">${err.message || 'Please check your connection and refresh.'}</div>
+            <button type="button" class="btn" onclick="window.app.loadBookingMentors()" style="background: #fff; border: 1px solid #cbd5e1; color: #475569; font-weight: 600; font-size: 0.82rem; padding: 0.4rem 0.9rem; border-radius: 6px;">
+              <i class="fa-solid fa-rotate-right"></i> Try Again
+            </button>
+          </div>
+        `;
       }
     },
 
-    filterBookingMentors(query) {
-      const q = (query || '').toLowerCase().trim();
-      if (!q) {
-        this.renderBookingMentorCards(this.bookingMentorsCache);
-        return;
+    filterBookingMentors(query, tierFilter) {
+      const q = (query !== undefined ? query : (document.getElementById('bookingMentorSearchInput')?.value || '')).toLowerCase().trim();
+      const tier = (tierFilter !== undefined ? tierFilter : (this.activeMentorTierFilter || 'all')).toLowerCase();
+
+      let list = this.bookingMentorsCache || [];
+
+      if (tier && tier !== 'all') {
+        if (tier === 'available') {
+          list = list.filter(m => (m.availabilityText || m.availability || '').toLowerCase().includes('today') || (m.availabilityText || m.availability || '').toLowerCase().includes('available'));
+        } else {
+          list = list.filter(m => (m.tier || '').toLowerCase().includes(tier) || (m.level || '').toLowerCase().includes(tier));
+        }
       }
-      const filtered = this.bookingMentorsCache.filter(m => {
-        const name = (m.name || '').toLowerCase();
-        const skills = (m.skills || []).map(s => (s.name || '').toLowerCase()).join(' ');
-        return name.includes(q) || skills.includes(q);
-      });
-      this.renderBookingMentorCards(filtered);
+
+      if (q) {
+        list = list.filter(m => {
+          const name = (m.name || '').toLowerCase();
+          const major = (m.major || '').toLowerCase();
+          const dept = (m.department || '').toLowerCase();
+          const college = (m.college || '').toLowerCase();
+          const tierText = (m.tier || '').toLowerCase();
+          const skills = (m.skills || []).map(s => (typeof s === 'string' ? s : s.name || '').toLowerCase()).join(' ');
+          return name.includes(q) || skills.includes(q) || major.includes(q) || dept.includes(q) || college.includes(q) || tierText.includes(q);
+        });
+      }
+
+      this.renderBookingMentorCards(list);
     },
 
     renderBookingMentorCards(mentors) {
@@ -3980,73 +4131,138 @@
       if (!listContainer) return;
 
       if (!mentors || mentors.length === 0) {
-        listContainer.innerHTML = `<div style="text-align: center; padding: 2rem; color: #94a3b8;">No mentors found matching your search.</div>`;
+        listContainer.innerHTML = `
+          <div style="background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 12px; padding: 2.5rem 1.5rem; text-align: center; color: #64748b;">
+            <i class="fa-solid fa-user-slash" style="font-size: 1.8rem; color: #94a3b8; margin-bottom: 0.6rem; display: block;"></i>
+            <div style="font-weight: 700; font-size: 0.95rem; color: #334155; margin-bottom: 0.25rem;">No Eligible Mentors Found</div>
+            <div style="font-size: 0.84rem;">No registered tutors matched your current search and filters. Try clearing your search query or selecting "All Mentors".</div>
+          </div>
+        `;
         return;
       }
 
+      const getTierBadgeStyle = (tier) => {
+        const t = (tier || '').toLowerCase();
+        if (t.includes('elite')) {
+          return { bg: '#fef3c7', color: '#b45309', border: '#fde68a', label: '🥇 Elite Master', rate: 2.5 };
+        } else if (t.includes('advanced')) {
+          return { bg: '#e0f2fe', color: '#0369a1', border: '#bae6fd', label: '🎖️ Advanced Tutor', rate: 2.0 };
+        } else if (t.includes('silver')) {
+          return { bg: '#f1f5f9', color: '#475569', border: '#e2e8f0', label: '🥈 Silver Tutor', rate: 1.5 };
+        } else {
+          return { bg: '#ffedd5', color: '#c2410c', border: '#fed7aa', label: '🥉 Bronze Tutor', rate: 1.0 };
+        }
+      };
+
       listContainer.innerHTML = mentors.map(m => {
         const isSelected = this.bookingState.mentor?.id === m.id;
-        const initials = (m.name || 'M').split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
-        const primarySkill = (m.skills && m.skills[0]?.name) || 'Computer Science';
-        const skillsPills = (m.skills || []).slice(0, 3).map(s => `
-          <span style="background: #f1f5f9; color: #475569; font-size: 0.72rem; padding: 0.15rem 0.5rem; border-radius: 4px;">${s.name || s}</span>
+        const tierStyle = getTierBadgeStyle(m.tier || m.level);
+        const avatarSrc = (window.getStudentAvatar && typeof window.getStudentAvatar === 'function')
+          ? window.getStudentAvatar(m.id || m.avatar)
+          : '/assets/avatar-default.png';
+
+        const deptYear = `${m.department || m.major || 'Computer Science & Engineering'} • ${m.year || '3rd Year'} • ${m.college || 'Vignan University'}`;
+
+        const skillsArray = (m.skills || []).map(s => (typeof s === 'string' ? s : s.name || '')).filter(Boolean);
+        const skillsPills = skillsArray.slice(0, 4).map(skillName => `
+          <span style="background: #f1f5f9; color: #334155; font-size: 0.74rem; font-weight: 600; padding: 0.2rem 0.55rem; border-radius: 6px; border: 1px solid #e2e8f0;">${this.escapeHtml(skillName)}</span>
         `).join('');
 
+        const hourlyRate = (m.rate != null ? Number(m.rate) : tierStyle.rate).toFixed(1);
+        const ratingVal = (m.rating != null ? Number(m.rating) : 5.0).toFixed(1);
+        const reviewsCount = m.reviewsCount != null ? m.reviewsCount : (m.reviews_count != null ? m.reviews_count : 16);
+
         return `
-          <div class="booking-mentor-card ${isSelected ? 'selected' : ''}" data-mentorid="${m.id}">
-            <div style="display: flex; align-items: center; gap: 1rem;">
-              <div style="width: 46px; height: 46px; border-radius: 50%; background: #d97706; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 1rem; flex-shrink: 0;">
-                ${initials}
+          <div class="booking-mentor-card ${isSelected ? 'selected' : ''}" data-mentorid="${m.id}" style="border: 1px solid ${isSelected ? '#2563eb' : '#e2e8f0'}; border-radius: 12px; padding: 1.15rem 1.25rem; background: ${isSelected ? '#f8faff' : '#fff'}; cursor: pointer; transition: all 0.2s ease; display: flex; align-items: center; justify-content: space-between; gap: 1rem; box-shadow: ${isSelected ? '0 4px 14px rgba(37, 99, 235, 0.12)' : 'none'};">
+            <div style="display: flex; align-items: center; gap: 1rem; flex: 1; min-width: 0;">
+              <!-- Profile Photo -->
+              <div style="position: relative; flex-shrink: 0;">
+                <img src="${avatarSrc}" alt="${this.escapeHtml(m.name)}"
+                  onerror="this.onerror=null; this.src='/assets/avatar-default.png';"
+                  style="width: 54px; height: 54px; border-radius: 50%; object-fit: cover; border: 2px solid ${tierStyle.color}; box-shadow: 0 2px 6px rgba(0,0,0,0.08);">
+                <div style="position: absolute; bottom: -2px; right: -2px; width: 14px; height: 14px; border-radius: 50%; background: #16a34a; border: 2px solid #fff;"></div>
               </div>
-              <div>
-                <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
-                  <span style="font-weight: 800; font-size: 0.98rem; color: #0f172a;">${m.name}</span>
-                  <span style="background: #eff6ff; color: #2563eb; font-size: 0.72rem; font-weight: 700; padding: 0.15rem 0.5rem; border-radius: 4px;">${m.tier || 'Elite Mentor'}</span>
-                  <span style="font-size: 0.78rem; color: #64748b;">⭐ ${m.rating || '4.8'} (${m.reviewsCount || 32} reviews)</span>
+
+              <!-- Mentor Info -->
+              <div style="flex: 1; min-width: 0;">
+                <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.25rem;">
+                  <span style="font-weight: 800; font-size: 1.02rem; color: #0f172a;">${this.escapeHtml(m.name)}</span>
+                  <span style="background: ${tierStyle.bg}; color: ${tierStyle.color}; border: 1px solid ${tierStyle.border}; font-size: 0.72rem; font-weight: 700; padding: 0.18rem 0.55rem; border-radius: 9999px;">
+                    ${tierStyle.label}
+                  </span>
+                  <span style="font-size: 0.78rem; color: #475569; font-weight: 600;">
+                    ⭐ ${ratingVal} (${reviewsCount} reviews)
+                  </span>
                 </div>
-                <div style="font-size: 0.82rem; color: #64748b; margin: 0.2rem 0 0.4rem;">${primarySkill}</div>
-                <div style="display: flex; gap: 0.35rem; flex-wrap: wrap; align-items: center;">
+
+                <!-- Department & Year -->
+                <div style="font-size: 0.8rem; color: #64748b; margin-bottom: 0.4rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                  ${this.escapeHtml(deptYear)}
+                </div>
+
+                <!-- Skills & Availability -->
+                <div style="display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center;">
                   ${skillsPills}
-                  <span style="font-size: 0.75rem; color: #16a34a; font-weight: 600; margin-left: 0.25rem;">
-                    <i class="fa-regular fa-circle-check"></i> ${m.availabilityText || 'Available Today'}
+                  ${skillsArray.length > 4 ? `<span style="font-size: 0.72rem; color: #64748b;">+${skillsArray.length - 4} more</span>` : ''}
+                  <span style="font-size: 0.74rem; color: #16a34a; font-weight: 700; margin-left: 0.35rem; display: inline-flex; align-items: center; gap: 0.25rem;">
+                    <i class="fa-regular fa-circle-check"></i> ${this.escapeHtml(m.availabilityText || 'Available Today')}
                   </span>
                 </div>
               </div>
             </div>
-            <div style="display: flex; align-items: center; gap: 1.25rem;">
+
+            <!-- Rate & Action Button -->
+            <div style="display: flex; align-items: center; gap: 1rem; flex-shrink: 0;">
               <div style="text-align: right;">
-                <div style="font-size: 1.05rem; font-weight: 800; color: #0f172a;">${m.rate || 2.5} <span style="font-size: 0.78rem; font-weight: 600; color: #64748b;">Credits/hr</span></div>
+                <div style="font-size: 1.15rem; font-weight: 800; color: #0f172a;">${hourlyRate} <span style="font-size: 0.78rem; font-weight: 600; color: #64748b;">Cr/hr</span></div>
+                <div style="font-size: 0.72rem; color: #64748b; font-weight: 600;">Escrow Protected</div>
               </div>
-              <div class="mentor-select-radio-circle"></div>
+              <button type="button" class="btn btn-select-mentor ${isSelected ? 'selected' : ''}" style="padding: 0.5rem 1rem; font-size: 0.84rem; font-weight: 700; border-radius: 8px; border: 1px solid ${isSelected ? '#2563eb' : '#cbd5e1'}; background: ${isSelected ? '#2563eb' : '#fff'}; color: ${isSelected ? '#fff' : '#1e293b'}; cursor: pointer; transition: all 0.2s ease;">
+                ${isSelected ? 'Selected ✓' : 'Select Mentor'}
+              </button>
+              <div class="mentor-select-radio-circle ${isSelected ? 'selected' : ''}" style="width: 20px; height: 20px; border-radius: 50%; border: 2px solid ${isSelected ? '#2563eb' : '#cbd5e1'}; background: ${isSelected ? '#2563eb' : '#fff'}; display: flex; align-items: center; justify-content: center;">
+                ${isSelected ? '<div style="width: 8px; height: 8px; border-radius: 50%; background: #fff;"></div>' : ''}
+              </div>
             </div>
           </div>
         `;
       }).join('');
 
       listContainer.querySelectorAll('.booking-mentor-card').forEach(card => {
-        card.addEventListener('click', () => {
+        card.addEventListener('click', (e) => {
           const mentorId = card.dataset.mentorid;
-          const mentor = this.bookingMentorsCache.find(m => m.id === mentorId);
+          const mentor = (this.bookingMentorsCache || []).find(m => m.id === mentorId);
           if (!mentor) return;
 
           this.bookingState.mentor = mentor;
-          const rate = mentor.rate || 2.5;
+          const rate = mentor.rate != null ? Number(mentor.rate) : 2.0;
           this.bookingState.creditsRequired = parseFloat((this.bookingState.durationHours * rate).toFixed(1));
 
-          listContainer.querySelectorAll('.booking-mentor-card').forEach(c => c.classList.remove('selected'));
-          card.classList.add('selected');
+          // Save state to sessionStorage
+          sessionStorage.setItem('skillswap_booking_flow', JSON.stringify(this.bookingState));
 
+          // Re-render mentor cards to reflect selected state
+          this.filterBookingMentors();
+
+          // Enable continue button
           const continueBtn = document.getElementById('btnContinueToSubject');
-          if (continueBtn) continueBtn.disabled = false;
+          if (continueBtn) {
+            continueBtn.disabled = false;
+            continueBtn.style.opacity = '1';
+            continueBtn.style.cursor = 'pointer';
+          }
 
           this.updateBookingSidebar();
         });
       });
 
       const continueBtn = document.getElementById('btnContinueToSubject');
-      if (continueBtn) continueBtn.disabled = !this.bookingState.mentor;
+      if (continueBtn) {
+        continueBtn.disabled = !this.bookingState.mentor;
+        continueBtn.style.opacity = this.bookingState.mentor ? '1' : '0.6';
+        continueBtn.style.cursor = this.bookingState.mentor ? 'pointer' : 'not-allowed';
+      }
     },
-
     async loadBookingSubjects() {
       const grid = document.getElementById('bookingSubjectsGrid');
       if (!grid) return;
@@ -4505,7 +4721,12 @@
         }
 
         await window.store.fetchSessions();
-        this.showToast(`🎉 Session booked! ${data.session?.credits || this.bookingState.creditsRequired} Credits held in Escrow.`, 'check');
+        this.notify({
+          title: '📅 Session Booked Successfully',
+          message: `Session booked with ${this.bookingState.mentor?.name || 'Mentor'} (${this.bookingState.date || 'Scheduled'} at ${this.bookingState.time || ''}). ${data.session?.credits || this.bookingState.creditsRequired} Credits held in Escrow.`,
+          type: 'calendar',
+          target_page: 'view-sessions'
+        });
 
         // Transition to Step 6 (Booking Success)
         this.navigateToBookingStep(6);
@@ -4879,15 +5100,28 @@
             `;
           } else if (isHost) {
             // Host Actions
-            actionBtnContainer.innerHTML = `
-              <button type="button" class="btn btn-dark" style="background: #0f172a; color: #fff; font-weight: 700; padding: 0.75rem;" onclick="window.app.openLiveRoom('${sess.id}')">
-                <i class="fa-solid fa-video"></i> Enter Live Room
-              </button>
-              ${!isCompleted ? `
-                <button type="button" class="btn btn-emerald" style="background: #059669; color: #fff; font-weight: 700; padding: 0.75rem;" onclick="window.app.concludeCohortSession('${sess.id}')">
-                  <i class="fa-solid fa-flag-checkered"></i> Finalize Attendance & Release Rewards
+            const timing = this.getScheduledTiming(sess);
+            const isCompletedSess = isCompleted || timing.isPastEnd;
+            const isUpcomingSess = !isCompletedSess && !timing.isStarted;
+
+            if (isCompletedSess) {
+              actionBtnContainer.innerHTML = `
+                <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 0.75rem; text-align: center; color: #166534; font-weight: 700;">
+                  <i class="fa-solid fa-circle-check"></i> Masterclass Completed & Attendance Finalized
+                </div>
+                <button type="button" class="btn btn-outline btn-sm" style="margin-top: 0.5rem;" onclick="window.app.openReportIssueModal('${sess.id}')">
+                  <i class="fa-solid fa-flag"></i> Report Issue
                 </button>
-                <div style="display: flex; gap: 0.5rem;">
+              `;
+            } else if (isUpcomingSess) {
+              actionBtnContainer.innerHTML = `
+                <div class="session-countdown-pill" data-session-countdown-start="${timing.startTime}" style="margin-bottom: 0.75rem; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 0.85rem; font-weight: 700; color: #2563eb; background: #eff6ff; padding: 8px 14px; border-radius: 10px; border: 1px solid #bfdbfe;">
+                  <i class="fa-regular fa-clock"></i> Starts in ${this.formatCountdown(timing.startsInMs)} (Opens at ${sess.time})
+                </div>
+                <button type="button" class="btn btn-secondary" disabled style="width: 100%; opacity: 0.7; cursor: not-allowed; padding: 0.75rem; font-weight: 700;">
+                  <i class="fa-solid fa-lock"></i> Classroom Opens at ${sess.time}
+                </button>
+                <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem;">
                   <button type="button" class="btn btn-outline" style="flex: 1; padding: 0.65rem;" onclick="window.app.openEditMasterclass('${sess.id}')">
                     <i class="fa-solid fa-pen-to-square"></i> Edit
                   </button>
@@ -4898,18 +5132,42 @@
                     <i class="fa-solid fa-ban"></i> Cancel
                   </button>
                 </div>
-              ` : `
-                <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 0.75rem; text-align: center; color: #166534; font-weight: 700;">
-                  <i class="fa-solid fa-circle-check"></i> Masterclass Completed & Attendance Finalized
+                <button type="button" class="btn btn-outline btn-sm" style="margin-top: 0.5rem;" onclick="window.app.openReportIssueModal('${sess.id}')">
+                  <i class="fa-solid fa-flag"></i> Report Issue
+                </button>
+              `;
+            } else {
+              // Live Now
+              actionBtnContainer.innerHTML = `
+                <div class="session-countdown-pill" data-session-countdown-end="${timing.endTime}" style="margin-bottom: 0.75rem; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 0.85rem; font-weight: 700; color: #dc2626; background: #fef2f2; padding: 8px 14px; border-radius: 10px; border: 1px solid #fecaca;">
+                  <i class="fa-solid fa-hourglass-half"></i> 🔴 LIVE NOW • ${this.formatCountdown(timing.remainingMs)} remaining
                 </div>
-              `}
-              <button type="button" class="btn btn-outline btn-sm" style="margin-top: 0.5rem;" onclick="window.app.openReportIssueModal('${sess.id}')">
-                <i class="fa-solid fa-flag"></i> Report Issue
-              </button>
-            `;
+                <button type="button" class="btn btn-emerald" style="width: 100%; background: #059669; color: #fff; font-weight: 700; padding: 0.75rem;" onclick="window.app.openLiveRoom('${sess.id}')">
+                  <i class="fa-solid fa-video"></i> Enter Live Classroom
+                </button>
+                <button type="button" class="btn btn-outline danger" style="width: 100%; margin-top: 0.5rem; padding: 0.65rem; color: #e11d48; border-color: #fecdd3;" onclick="window.app.mentorEndLiveSession('${sess.id}')">
+                  <i class="fa-solid fa-stop"></i> End Masterclass Session
+                </button>
+                <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem;">
+                  <button type="button" class="btn btn-outline" style="flex: 1; padding: 0.65rem;" onclick="window.app.openEditMasterclass('${sess.id}')">
+                    <i class="fa-solid fa-pen-to-square"></i> Edit
+                  </button>
+                  <button type="button" class="btn btn-outline danger" style="flex: 1; padding: 0.65rem;" onclick="window.app.openCancelModal('${sess.id}')">
+                    <i class="fa-solid fa-ban"></i> Cancel
+                  </button>
+                </div>
+                <button type="button" class="btn btn-outline btn-sm" style="margin-top: 0.5rem;" onclick="window.app.openReportIssueModal('${sess.id}')">
+                  <i class="fa-solid fa-flag"></i> Report Issue
+                </button>
+              `;
+            }
           } else {
-            // Receiver Actions
-            if (isCompleted) {
+            // Receiver / Student Actions
+            const timing = this.getScheduledTiming(sess);
+            const isCompletedSess = isCompleted || timing.isPastEnd;
+            const isUpcomingSess = !isCompletedSess && !timing.isStarted;
+
+            if (isCompletedSess) {
               actionBtnContainer.innerHTML = `
                 <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 0.75rem; text-align: center; color: #166534; font-weight: 700; margin-bottom: 0.5rem;">
                   <i class="fa-solid fa-circle-check"></i> Masterclass Completed
@@ -4921,26 +5179,42 @@
                   <i class="fa-solid fa-flag"></i> Report Issue
                 </button>
               `;
-            } else if (isEnrolled) {
+            } else if (isUpcomingSess) {
               actionBtnContainer.innerHTML = `
-                <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 0.75rem; text-align: center; color: #166534; font-weight: 700; margin-bottom: 0.5rem;">
-                  <i class="fa-solid fa-circle-check"></i> Registered ✓
+                <div class="session-countdown-pill" data-session-countdown-start="${timing.startTime}" style="margin-bottom: 0.75rem; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 0.85rem; font-weight: 700; color: #2563eb; background: #eff6ff; padding: 8px 14px; border-radius: 10px; border: 1px solid #bfdbfe;">
+                  <i class="fa-regular fa-clock"></i> Starts in ${this.formatCountdown(timing.startsInMs)} (Opens at ${sess.time})
                 </div>
-                <button type="button" class="btn btn-dark" style="width: 100%; background: #0f172a; color: #fff; font-weight: 700; padding: 0.75rem;" onclick="window.app.openLiveRoom('${sess.id}')">
-                  <i class="fa-solid fa-video"></i> Enter Live Session
-                </button>
+                ${!isEnrolled ? `
+                  <button type="button" class="btn ${isFull ? 'btn-secondary' : 'btn-primary'}" ${isFull ? 'disabled' : ''} style="width: 100%; padding: 0.75rem; font-weight: 700;" onclick="window.app.enrollInLiveCohort('${sess.id}')">
+                    ${isFull ? 'Masterclass Full' : 'Register / Enroll for Free'}
+                  </button>
+                ` : `
+                  <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 0.65rem; text-align: center; color: #166534; font-weight: 700; margin-bottom: 0.5rem;">
+                    <i class="fa-solid fa-circle-check"></i> Registered for this Masterclass
+                  </div>
+                  <button type="button" class="btn btn-secondary" disabled style="width: 100%; opacity: 0.7; cursor: not-allowed; padding: 0.75rem; font-weight: 700;">
+                    <i class="fa-solid fa-lock"></i> Classroom Opens at ${sess.time}
+                  </button>
+                `}
                 <button type="button" class="btn btn-outline btn-sm" style="margin-top: 0.5rem;" onclick="window.app.openReportIssueModal('${sess.id}')">
                   <i class="fa-solid fa-flag"></i> Report Issue
                 </button>
               `;
             } else {
+              // Live Now for Student
               actionBtnContainer.innerHTML = `
-                <button type="button" class="btn ${isFull ? 'btn-secondary' : 'btn-primary'}" style="width: 100%; padding: 0.85rem; font-size: 1rem; font-weight: 700;" ${isFull ? 'disabled' : ''} onclick="window.app.enrollInLiveCohort('${sess.id}')">
-                  ${isFull ? '<i class="fa-solid fa-user-xmark"></i> Session Full' : '<i class="fa-solid fa-gift"></i> Join Masterclass — Free (0 Credits)'}
-                </button>
-                <p style="text-align: center; font-size: 0.78rem; color: #059669; font-weight: 600; margin: 0.4rem 0 0;">
-                  <i class="fa-solid fa-circle-check"></i> Free Admission for Vignan University Students
-                </p>
+                <div class="session-countdown-pill" data-session-countdown-end="${timing.endTime}" style="margin-bottom: 0.75rem; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 0.85rem; font-weight: 700; color: #dc2626; background: #fef2f2; padding: 8px 14px; border-radius: 10px; border: 1px solid #fecaca;">
+                  <i class="fa-solid fa-hourglass-half"></i> 🔴 LIVE NOW • ${this.formatCountdown(timing.remainingMs)} remaining
+                </div>
+                ${!isEnrolled ? `
+                  <button type="button" class="btn ${isFull ? 'btn-secondary' : 'btn-emerald'}" ${isFull ? 'disabled' : ''} style="width: 100%; background: #059669; color: #fff; font-weight: 700; padding: 0.75rem;" onclick="window.app.enrollInLiveCohort('${sess.id}')">
+                    <i class="fa-solid fa-video"></i> ${isFull ? 'Masterclass Full' : 'Join Live Session'}
+                  </button>
+                ` : `
+                  <button type="button" class="btn btn-emerald" style="width: 100%; background: #059669; color: #fff; font-weight: 700; padding: 0.75rem;" onclick="window.app.openLiveRoom('${sess.id}')">
+                    <i class="fa-solid fa-video"></i> Join Live Session
+                  </button>
+                `}
                 <button type="button" class="btn btn-outline btn-sm" style="margin-top: 0.5rem;" onclick="window.app.openReportIssueModal('${sess.id}')">
                   <i class="fa-solid fa-flag"></i> Report Issue
                 </button>
@@ -5015,7 +5289,12 @@
 
       try {
         const res = await window.store.acceptSession(sessionId);
-        this.showToast('🎉 Session Request Accepted! The session is now confirmed.', 'check');
+        this.notify({
+          title: '✅ Skill Swap Session Confirmed',
+          message: 'You accepted the session request! The session has been confirmed on your schedule.',
+          type: 'check',
+          target_page: 'view-sessions'
+        });
         await window.store.fetchSessions();
         await window.store.fetchMySessions();
         await window.store.fetchWallet();
@@ -5086,7 +5365,12 @@
         await window.store.declineSession(sessionId, reason);
         this.closeModal('declineSessionRequestModal');
         this.restorePageScroll();
-        this.showToast('Session request declined. Student escrow credits refunded.', 'info');
+        this.notify({
+          title: '❌ Skill Swap Request Declined',
+          message: 'The session request was declined. Student escrow credits have been refunded.',
+          type: 'info',
+          target_page: 'view-sessions'
+        });
         await window.store.fetchSessions();
         await window.store.fetchMySessions();
         await window.store.fetchWallet();
@@ -5655,13 +5939,16 @@
 
         const submitBtn = document.getElementById('submitSupportTicketBtn');
         const origText = submitBtn ? submitBtn.innerHTML : '';
+        if (this._isSubmittingSupportTicket) return; // Prevent duplicate submissions while in-flight
+        this._isSubmittingSupportTicket = true;
+
         if (submitBtn) {
-          submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Submitting Doubt...';
+          submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Submitting Support Ticket...';
           submitBtn.disabled = true;
         }
 
         try {
-          await window.store.createSupportTicket({
+          const res = await window.store.createSupportTicket({
             skillName: selectedSkill,
             category: issueType,
             course: selectedSkill,
@@ -5671,11 +5958,6 @@
             codeSnippet,
             attachments: this.doubtAttachments
           });
-
-          if (submitBtn) {
-            submitBtn.innerHTML = origText;
-            submitBtn.disabled = false;
-          }
 
           this.closeModal('createSupportTicketModal');
           createForm.reset();
@@ -5687,13 +5969,16 @@
 
           await this.refreshDynamicSupportSubjects();
           await this.renderSupportDesk();
-          this.showToast(`🎉 Doubt for "${selectedSkill}" submitted to Support Hub! (Cost: 0 Cr)`, 'check');
+          this.showToast(res?.message || `🎉 Support ticket for "${selectedSkill}" submitted successfully! (Cost: 0 Cr)`, 'check');
         } catch (err) {
+          console.error('Support ticket submission error:', err);
+          alert('Could not submit support ticket: ' + (err.message || 'Unable to submit support ticket. Please check backend connection.'));
+        } finally {
+          this._isSubmittingSupportTicket = false;
           if (submitBtn) {
             submitBtn.innerHTML = origText;
             submitBtn.disabled = false;
           }
-          alert('Could not submit support ticket: ' + err.message);
         }
       });
 
@@ -6686,15 +6971,33 @@
           let subtextMsg = `Evaluation Complete! Grade: <strong>${gradePill}</strong>. Result recorded in SQLite / Supabase database.`;
           if (result.qualificationBonusAwarded) {
             subtextMsg += `<br><div style="margin-top:0.65rem; padding:0.5rem 0.75rem; background:rgba(16,185,129,0.12); border:1px solid rgba(16,185,129,0.3); border-radius:8px; color:var(--accent-emerald); font-weight:700; display:inline-flex; align-items:center; gap:6px;">🎁 +${result.bonusCredits || 2.0} Course Qualification Bonus Credited to Wallet!</div>`;
-            this.showToast(`🎉 Grade Allotted: ${gradePill}! +${result.bonusCredits || 2.0} Bonus Credits credited!`, 'award');
-          } else {
-            this.showToast(`Grade Allotted: ${gradePill} (${result.marksObtained}/${maxMarks} Marks)!`, 'check');
           }
           if (subtext) subtext.innerHTML = subtextMsg;
+
+          this.notify({
+            title: `🎉 Assessment Passed: ${this.activeQuiz?.skill_name || 'Subject'}`,
+            message: `You scored ${result.marksObtained}/${maxMarks} Marks (${result.scorePercent}%) with Negative Marking. Grade Allotted: ${gradePill} (${gradeRate}).`,
+            type: 'award',
+            target_page: 'view-quizzes'
+          });
+
+          this.notify({
+            title: `🎖️ Tutor Level Upgraded: ${gradePill}`,
+            message: `Congratulations! You unlocked the ${gradePill} teaching badge (${gradeRate}) for ${this.escapeHtml(this.activeQuiz?.skill_name || 'Subject')}.`,
+            type: 'award',
+            target_page: 'view-profile'
+          });
         } else {
           if (scoreCircle) scoreCircle.className = 'score-circle fail';
           if (heading) heading.innerHTML = `Assessment Not Passed (${result.marksObtained}/${maxMarks} Marks • ${result.scorePercent}%)`;
           if (subtext) subtext.innerHTML = `Grade: <strong style="color:var(--accent-rose);">FAIL</strong>. Passing requirement is ${passMarks} / ${maxMarks} Marks (70%). Review your answers below and click <strong>Back to Assessments</strong> or <strong>Retake Assessment</strong>.`;
+
+          this.notify({
+            title: `📝 Assessment Submitted: ${this.activeQuiz?.skill_name || 'Subject'}`,
+            message: `You scored ${result.marksObtained}/${maxMarks} Marks (${result.scorePercent}%). Passing requirement is 70% to unlock a Tutor Badge.`,
+            type: 'quiz',
+            target_page: 'view-quizzes'
+          });
         }
 
         // Render detailed review ledger with negative marking indicators
@@ -7103,9 +7406,8 @@
       if (viewId === 'view-quizzes') this.renderQuizzes();
       if (viewId === 'view-codelab' && window.codelab) window.codelab.render();
       if (viewId === 'view-booking') {
-        if (!this.bookingState || !this.bookingState.step) {
-          this.startBookingFlow();
-        }
+        const step = (this.bookingState && this.bookingState.step) || 1;
+        this.navigateToBookingStep(step, false);
       }
       if (viewId === 'view-sessions') {
         this.sessionsFilter = 'UPCOMING';
@@ -7644,32 +7946,381 @@
       if (learnAvatar) learnAvatar.src = window.getStudentAvatar('sri');
     },
 
-    async renderNotifications() {
-      if (window.store.fetchNotifications) {
+    async notify({ title, message, type = 'general', target_page = null }) {
+      if (window.store && typeof window.store.addNotification === 'function') {
+        return await window.store.addNotification({ title, message, type, target_page });
+      }
+      return null;
+    },
+
+    showToast(message, icon = 'info') {
+      if (!message) return;
+      return this.notify({
+        title: 'SkillSwap Notification',
+        message: String(message),
+        type: icon || 'general'
+      });
+    },
+
+    getScheduledTiming(session) {
+      if (!session) return { startTime: 0, endTime: 0, isStarted: false, isPastEnd: false, remainingMs: 0, startsInMs: 0 };
+
+      let durationHours = 1.0;
+      if (session.hours != null) {
+        durationHours = Number(session.hours);
+      } else if (session.durationHours != null) {
+        durationHours = Number(session.durationHours);
+      } else if (session.duration != null) {
+        const dStr = String(session.duration).toLowerCase();
+        if (dStr.includes('min')) {
+          const num = parseFloat(dStr.replace('min', '').trim());
+          if (!isNaN(num)) durationHours = num / 60;
+        } else if (dStr.includes('hr')) {
+          const num = parseFloat(dStr.replace('hr', '').trim());
+          if (!isNaN(num)) durationHours = num;
+        } else {
+          const num = parseFloat(dStr);
+          if (!isNaN(num)) durationHours = num;
+        }
+      }
+      if (isNaN(durationHours) || durationHours <= 0) durationHours = 1.0;
+
+      // Direct millisecond timestamps if available from backend
+      if (session.timing && session.timing.startTime) {
+        const startMs = Number(session.timing.startTime);
+        const endMs = Number(session.timing.endTime) || (startMs + Math.round(durationHours * 3600000));
+        const nowMs = Date.now();
+        return {
+          startTime: startMs,
+          endTime: endMs,
+          isStarted: nowMs >= startMs,
+          isPastEnd: nowMs >= endMs,
+          remainingMs: Math.max(0, endMs - nowMs),
+          startsInMs: Math.max(0, startMs - nowMs)
+        };
+      }
+
+      if (session.scheduled_start_ms && Number(session.scheduled_start_ms) > 0) {
+        const startMs = Number(session.scheduled_start_ms);
+        const endMs = session.scheduled_end_ms ? Number(session.scheduled_end_ms) : (startMs + Math.round(durationHours * 3600000));
+        const nowMs = Date.now();
+        return {
+          startTime: startMs,
+          endTime: endMs,
+          isStarted: nowMs >= startMs,
+          isPastEnd: nowMs >= endMs,
+          remainingMs: Math.max(0, endMs - nowMs),
+          startsInMs: Math.max(0, startMs - nowMs)
+        };
+      }
+
+      const dateStr = session.date || session.session_date || new Date().toISOString().split('T')[0];
+      const timeStr = session.time || session.start_time || '08:00 PM';
+
+      let year = 2026, month = 11, day = 2;
+      const cleanDateStr = String(dateStr).trim();
+
+      const dmyMatch = cleanDateStr.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
+      if (dmyMatch) {
+        day = parseInt(dmyMatch[1], 10);
+        month = parseInt(dmyMatch[2], 10);
+        year = parseInt(dmyMatch[3], 10);
+      } else {
+        const ymdMatch = cleanDateStr.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+        if (ymdMatch) {
+          year = parseInt(ymdMatch[1], 10);
+          month = parseInt(ymdMatch[2], 10);
+          day = parseInt(ymdMatch[3], 10);
+        } else {
+          const dObj = new Date(cleanDateStr);
+          if (!isNaN(dObj.getTime())) {
+            year = dObj.getFullYear();
+            month = dObj.getMonth() + 1;
+            day = dObj.getDate();
+          }
+        }
+      }
+
+      let hours = 20, minutes = 0;
+      const tMatch = String(timeStr).trim().match(/^(\d{1,2}):?(\d{2})?\s*(AM|PM)?$/i);
+      if (tMatch) {
+        hours = parseInt(tMatch[1], 10);
+        minutes = tMatch[2] ? parseInt(tMatch[2], 10) : 0;
+        const ampm = tMatch[3] ? tMatch[3].toUpperCase() : null;
+        if (ampm === 'PM' && hours < 12) hours += 12;
+        if (ampm === 'AM' && hours === 12) hours = 0;
+      }
+
+      const localScheduledDate = new Date(year, month - 1, day, hours, minutes, 0, 0);
+      let startMs = localScheduledDate.getTime();
+      if (isNaN(startMs)) {
+        startMs = session.created_at ? new Date(session.created_at).getTime() : Date.now();
+      }
+
+      const endMs = startMs + Math.round(durationHours * 3600000);
+      const nowMs = Date.now();
+
+      return {
+        startTime: startMs,
+        endTime: endMs,
+        isStarted: nowMs >= startMs,
+        isPastEnd: nowMs >= endMs,
+        remainingMs: Math.max(0, endMs - nowMs),
+        startsInMs: Math.max(0, startMs - nowMs)
+      };
+    },
+
+    formatCountdown(ms) {
+      if (ms <= 0) return '00:00:00';
+      const totalSec = Math.floor(ms / 1000);
+      const hrs = Math.floor(totalSec / 3600);
+      const mins = Math.floor((totalSec % 3600) / 60);
+      const secs = totalSec % 60;
+      if (hrs > 0) {
+        return `${hrs}h ${mins}m ${String(secs).padStart(2, '0')}s`;
+      }
+      return `${mins}m ${String(secs).padStart(2, '0')}s`;
+    },
+
+    startSessionTimer(session) {
+      if (this.timerInterval) clearInterval(this.timerInterval);
+      const display = document.getElementById('sessionTimerDisplay');
+      if (!display) return;
+
+      const timing = this.getScheduledTiming(session);
+      const endMs = timing.endTime;
+
+      const updateDisplay = () => {
+        if (!display) return;
+        const nowMs = Date.now();
+        const remainingSecs = Math.max(0, Math.floor((endMs - nowMs) / 1000));
+        this.timerSeconds = remainingSecs;
+
+        if (remainingSecs <= 0) {
+          display.textContent = '00:00:00 SESSION ENDED';
+          if (this.timerInterval) {
+            clearInterval(this.timerInterval);
+            this.timerInterval = null;
+          }
+          this.handleTimerExpired(session);
+          return;
+        }
+
+        const hrs = String(Math.floor(remainingSecs / 3600)).padStart(2, '0');
+        const mins = String(Math.floor((remainingSecs % 3600) / 60)).padStart(2, '0');
+        const secs = String(remainingSecs % 60).padStart(2, '0');
+        display.textContent = `${hrs}:${mins}:${secs} REMAINING`;
+      };
+
+      updateDisplay();
+      this.timerInterval = setInterval(updateDisplay, 1000);
+    },
+
+    stopSessionTimer() {
+      if (this.timerInterval) {
+        clearInterval(this.timerInterval);
+        this.timerInterval = null;
+      }
+      const display = document.getElementById('sessionTimerDisplay');
+      if (display) {
+        display.textContent = '00:00:00 SESSION ENDED';
+      }
+    },
+
+    handleTimerExpired(session) {
+      if (window.skillSwapConference && window.skillSwapConference.isInCall) {
+        window.skillSwapConference.handleRemoteSessionEnded('This masterclass has reached its scheduled duration and concluded.');
+      }
+      this.notify({
+        title: '🏁 Masterclass Concluded',
+        message: 'The scheduled session duration has expired. Attendance and rewards have been recorded.',
+        type: 'clock',
+        target_page: 'view-sessions'
+      });
+      this.switchView('view-sessions');
+      this.switchSessionsTab('COMPLETED');
+    },
+
+    async mentorEndLiveSession(sessionId) {
+      const sid = sessionId || this.activeLiveRoomSessionId;
+      if (!sid) return;
+
+      if (!confirm('Are you sure you want to permanently end this Masterclass? All participants will be disconnected, the duration timer will stop, and actual completion time will be saved.')) {
+        return;
+      }
+
+      try {
+        const headers = window.store?.getAuthHeaders ? window.store.getAuthHeaders() : { 'Content-Type': 'application/json' };
+        await fetch(`/api/sessions/${sid}/end-meeting`, {
+          method: 'POST',
+          headers
+        });
+
+        if (window.skillSwapConference) {
+          window.skillSwapConference.handleRemoteSessionEnded('The mentor has ended this masterclass.');
+        }
+
+        this.stopSessionTimer();
+
+        this.notify({
+          title: '🏁 Masterclass Completed',
+          message: 'You have permanently ended the live masterclass session. Attendance and creator rewards have been finalized.',
+          type: 'success',
+          target_page: 'view-sessions'
+        });
+
+        await window.store.fetchSessions();
+        await window.store.fetchMySessions();
+        this.switchView('view-sessions');
+        this.switchSessionsTab('COMPLETED');
+      } catch (err) {
+        alert('Could not end session: ' + err.message);
+      }
+    },
+
+    startMasterclassCountdownTicker() {
+      if (this.masterclassTickerInterval) clearInterval(this.masterclassTickerInterval);
+      this.masterclassTickerInterval = setInterval(() => {
+        const nowMs = Date.now();
+        let needsRerender = false;
+
+        document.querySelectorAll('[data-session-countdown-start]').forEach(el => {
+          const startMs = Number(el.dataset.sessionCountdownStart);
+          if (startMs) {
+            const diff = startMs - nowMs;
+            if (diff <= 0) {
+              needsRerender = true;
+            } else {
+              el.innerHTML = `<i class="fa-regular fa-clock"></i> Starts in ${this.formatCountdown(diff)}`;
+            }
+          }
+        });
+
+        document.querySelectorAll('[data-session-countdown-end]').forEach(el => {
+          const endMs = Number(el.dataset.sessionCountdownEnd);
+          if (endMs) {
+            const diff = endMs - nowMs;
+            if (diff <= 0) {
+              needsRerender = true;
+            } else {
+              el.innerHTML = `<i class="fa-solid fa-hourglass-half"></i> ${this.formatCountdown(diff)} remaining`;
+            }
+          }
+        });
+
+        if (needsRerender && this.currentView === 'view-sessions') {
+          this.renderSessions();
+        }
+      }, 1000);
+    },
+
+    async renderNotifications(fetchFromApi = true) {
+      if (fetchFromApi && window.store && typeof window.store.fetchNotifications === 'function') {
         try { await window.store.fetchNotifications(); } catch (e) { }
       }
-      const notifs = window.store.notifications || [];
-      const unreadCount = notifs.filter(n => n.unread || n.is_unread).length;
+      const notifs = window.store?.notifications || [];
+      const unreadCount = notifs.filter(n => n.unread || n.is_unread == 1 || n.is_unread === true).length;
+      
       const badge = document.getElementById('notifBadge');
       if (badge) {
         badge.textContent = unreadCount > 99 ? '99+' : unreadCount;
         badge.style.display = unreadCount > 0 ? 'flex' : 'none';
       }
 
+      const headerUnread = document.getElementById('notifHeaderUnreadBadge');
+      if (headerUnread) {
+        headerUnread.textContent = `${unreadCount} unread`;
+        headerUnread.style.display = unreadCount > 0 ? 'inline-block' : 'none';
+      }
+
       const list = document.getElementById('notifListContainer');
       if (!list) return;
 
-      list.innerHTML = notifs.map(n => `
-        <div class="notif-item ${n.unread || n.is_unread ? 'unread' : ''}">
-          <div style="font-size: 1.1rem; color: var(--primary);">
-            <i class="fa-solid fa-${n.type === 'credit' ? 'coins' : n.type === 'calendar' ? 'calendar-check' : n.type === 'quiz' ? 'award' : 'wand-magic-sparkles'}"></i>
+      if (!notifs || notifs.length === 0) {
+        list.innerHTML = `
+          <div class="notif-empty-state">
+            <div class="notif-empty-icon"><i class="fa-regular fa-bell"></i></div>
+            <div class="notif-empty-title">No notifications yet</div>
+            <div class="notif-empty-desc">Your assessments, certificates, swap requests, and activity alerts will appear here.</div>
           </div>
-          <div style="flex: 1;">
-            <div style="font-weight: 700;">${n.title}</div>
-            <div style="font-size: 0.7rem; color: var(--text-muted);">${n.time}</div>
+        `;
+        return;
+      }
+
+      const getIconConfig = (type) => {
+        const t = (type || '').toLowerCase();
+        if (t.includes('award') || t.includes('tier') || t.includes('tutor')) return { icon: 'fa-award', cls: 'award' };
+        if (t.includes('quiz') || t.includes('assessment')) return { icon: 'fa-graduation-cap', cls: 'quiz' };
+        if (t.includes('cert')) return { icon: 'fa-certificate', cls: 'award' };
+        if (t.includes('check') || t.includes('success')) return { icon: 'fa-circle-check', cls: 'check' };
+        if (t.includes('calendar') || t.includes('session') || t.includes('booking') || t.includes('swap')) return { icon: 'fa-calendar-check', cls: 'calendar' };
+        if (t.includes('coins') || t.includes('credit') || t.includes('wallet') || t.includes('escrow')) return { icon: 'fa-coins', cls: 'coins' };
+        if (t.includes('user') || t.includes('profile')) return { icon: 'fa-user-check', cls: 'user' };
+        if (t.includes('error') || t.includes('fail') || t.includes('reject')) return { icon: 'fa-circle-exclamation', cls: 'error' };
+        if (t.includes('warn') || t.includes('review') || t.includes('triangle')) return { icon: 'fa-triangle-exclamation', cls: 'warning' };
+        if (t.includes('lock') || t.includes('security')) return { icon: 'fa-shield-halved', cls: 'lock' };
+        if (t.includes('message') || t.includes('chat')) return { icon: 'fa-comment-dots', cls: 'message' };
+        return { icon: 'fa-wand-magic-sparkles', cls: 'general' };
+      };
+
+      list.innerHTML = notifs.map(n => {
+        const isUnread = Boolean(n.unread || n.is_unread == 1 || n.is_unread === true);
+        const { icon, cls } = getIconConfig(n.type);
+        const safeId = this.escapeQuotes(n.id || '');
+        const targetPage = n.target_page ? this.escapeQuotes(n.target_page) : '';
+
+        return `
+          <div class="notif-item ${isUnread ? 'unread' : 'read'}" onclick="window.app.handleNotificationClick('${safeId}', '${targetPage}')">
+            <div class="notif-icon-box notif-icon-${cls}">
+              <i class="fa-solid ${icon}"></i>
+            </div>
+            <div class="notif-body">
+              <div class="notif-title-row">
+                <span class="notif-title">${this.escapeHtml(n.title)}</span>
+                ${isUnread ? '<span class="notif-unread-dot" title="Unread notification"></span>' : ''}
+              </div>
+              <div class="notif-message">${this.escapeHtml(n.message || '')}</div>
+              <div class="notif-footer">
+                <span class="notif-time"><i class="fa-regular fa-clock"></i> ${this.escapeHtml(n.time || 'Just now')}</span>
+                ${targetPage ? `<span class="notif-link-hint">Open <i class="fa-solid fa-arrow-right"></i></span>` : ''}
+              </div>
+            </div>
+            ${isUnread ? `
+              <button type="button" class="notif-item-read-btn" title="Mark as read" onclick="event.stopPropagation(); window.app.markSingleNotificationRead('${safeId}')">
+                <i class="fa-solid fa-check"></i>
+              </button>
+            ` : ''}
           </div>
-        </div>
-      `).join('');
+        `;
+      }).join('');
+    },
+
+    async handleNotificationClick(id, targetPage) {
+      if (id && window.store && typeof window.store.markNotificationRead === 'function') {
+        try { await window.store.markNotificationRead(id); } catch (e) { }
+      }
+      this.renderNotifications(false);
+
+      if (targetPage) {
+        this.switchView(targetPage);
+      }
+
+      const notifDropdown = document.getElementById('notifDropdown');
+      if (notifDropdown) notifDropdown.classList.remove('show');
+    },
+
+    async markSingleNotificationRead(id) {
+      if (id && window.store && typeof window.store.markNotificationRead === 'function') {
+        try { await window.store.markNotificationRead(id); } catch (e) { }
+      }
+      this.renderNotifications(false);
+    },
+
+    async markAllNotificationsRead() {
+      if (window.store && typeof window.store.markAllNotificationsRead === 'function') {
+        try { await window.store.markAllNotificationsRead(); } catch (e) { }
+      }
+      this.renderNotifications(false);
     },
 
     // ==========================================
@@ -8631,27 +9282,20 @@
       const partnerName = isHost ? (isCohort ? `${countN} Enrolled Students` : (sess.studentName || partnerId)) : (sess.teacherName || partnerId);
       const partnerAvatar = window.getStudentAvatar(partnerId === 'Students' ? sess.teacher_id : partnerId);
 
-      let monthStr = 'MAR';
-      let dayStr = '15';
-      let yearStr = '2025';
-      if (sess.date) {
-        const parts = sess.date.split('-');
-        if (parts.length === 3) {
-          const mNames = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-          monthStr = mNames[parseInt(parts[1], 10) - 1] || 'MAR';
-          dayStr = parts[2];
-          yearStr = parts[0];
-        } else {
-          monthStr = sess.date.substr(0, 3).toUpperCase();
-        }
-      }
+      const timing = this.getScheduledTiming(sess);
+      const dateObj = new Date(timing.startTime);
+      const mNames = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+      const monthStr = mNames[dateObj.getMonth()] || 'NOV';
+      const dayStr = String(dateObj.getDate()).padStart(2, '0');
+      const yearStr = String(dateObj.getFullYear());
 
       const st = (sess.status || '').toUpperCase();
-      const isCompleted = st === 'COMPLETED' || st === 'ATTENDANCE_FINALIZED';
-      const isCancelled = st === 'CANCELLED' || st === 'DECLINED';
       const isDeclined = st === 'DECLINED';
-      const isAccepted = st === 'ACCEPTED' || st === 'CONFIRMED' || st === 'OPEN' || st === 'UPCOMING';
+      const isCancelled = st === 'CANCELLED' || isDeclined;
       const isPending = st === 'PENDING';
+      const isCompleted = st === 'COMPLETED' || st === 'ATTENDANCE_FINALIZED' || st === 'ENDED' || (isCohort && timing.isPastEnd && !isCancelled && !isPending);
+      const isLive = !isCompleted && !isCancelled && !isPending && (st === 'LIVE' || timing.isStarted);
+      const isUpcoming = !isCompleted && !isCancelled && !isPending && !isLive;
 
       let statusClass = 'confirmed';
       let statusLabel = 'Confirmed';
@@ -8675,9 +9319,12 @@
       } else if (isPending) {
         statusClass = 'pending';
         statusLabel = '🟡 Waiting for Mentor Response';
-      } else if (isAccepted) {
-        statusClass = 'confirmed';
-        statusLabel = '🟢 Accepted';
+      } else if (isLive) {
+        statusClass = 'live';
+        statusLabel = '🔴 LIVE NOW';
+      } else if (isUpcoming) {
+        statusClass = 'upcoming';
+        statusLabel = `● Upcoming (${sess.time || 'Scheduled'})`;
       }
 
       const dropdownItems = [];
@@ -8760,13 +9407,21 @@
 
           <div class="session-row-right">
             ${isCohort ? `
-              ${!isCompleted && !isCancelled ? `
+              ${isCompleted ? `
+                <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.openMasterclassDetailsPage('${sess.id}')">
+                  View Summary
+                </button>
+              ` : isCancelled ? `
+                <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.openMasterclassDetailsPage('${sess.id}')">
+                  View Details
+                </button>
+              ` : isUpcoming ? `
+                <div class="session-countdown-pill" data-session-countdown-start="${timing.startTime}" style="margin-right: 0.5rem; display: inline-flex; align-items: center; gap: 5px; font-size: 0.76rem; font-weight: 700; color: #2563eb; background: #eff6ff; padding: 4px 10px; border-radius: 9999px;">
+                  <i class="fa-regular fa-clock"></i> Starts in ${this.formatCountdown(timing.startsInMs)}
+                </div>
                 ${isHost ? `
-                  <button type="button" class="btn btn-dark btn-sm" style="background: #0f172a; color: #fff;" onclick="window.app.openLiveRoom('${sess.id}')">
-                    Enter Live Room
-                  </button>
-                  <button type="button" class="btn btn-emerald btn-sm" onclick="window.app.concludeCohortSession('${sess.id}')" title="End session and finalize attendance-based reward">
-                    <i class="fa-solid fa-flag-checkered"></i> Finalize Attendance
+                  <button type="button" class="btn btn-secondary btn-sm" disabled style="opacity: 0.7; cursor: not-allowed;" title="Classroom unlocks automatically at ${sess.time}">
+                    <i class="fa-solid fa-lock"></i> Opens at ${sess.time}
                   </button>
                   <button type="button" class="btn btn-outline btn-sm" onclick="window.app.openEditMasterclass('${sess.id}')" title="Edit Masterclass">
                     <i class="fa-solid fa-pen-to-square"></i> Edit
@@ -8777,12 +9432,12 @@
                 ` : `
                   ${!isEnrolled ? `
                     <button type="button" class="btn ${isFull ? 'btn-secondary' : 'btn-primary'} btn-sm" ${isFull ? 'disabled' : ''} onclick="window.app.enrollInLiveCohort('${sess.id}')">
-                      ${isFull ? 'FULL' : 'Join Session'}
+                      ${isFull ? 'FULL' : 'Register / Enroll'}
                     </button>
                   ` : `
                     <span class="session-status-badge confirmed" style="font-size: 0.75rem;">Registered</span>
-                    <button type="button" class="btn btn-dark btn-sm" style="background: #0f172a; color: #fff;" onclick="window.app.openLiveRoom('${sess.id}')">
-                      Enter Live Session
+                    <button type="button" class="btn btn-secondary btn-sm" disabled style="opacity: 0.7; cursor: not-allowed;" title="Classroom unlocks automatically at ${sess.time}">
+                      <i class="fa-solid fa-lock"></i> Starts at ${sess.time}
                     </button>
                   `}
                 `}
@@ -8790,6 +9445,30 @@
                   View Details
                 </button>
               ` : `
+                <div class="session-countdown-pill" data-session-countdown-end="${timing.endTime}" style="margin-right: 0.5rem; display: inline-flex; align-items: center; gap: 5px; font-size: 0.76rem; font-weight: 700; color: #dc2626; background: #fef2f2; padding: 4px 10px; border-radius: 9999px;">
+                  <i class="fa-solid fa-hourglass-half"></i> ${this.formatCountdown(timing.remainingMs)} remaining
+                </div>
+                ${isHost ? `
+                  <button type="button" class="btn btn-emerald btn-sm" style="background: #059669; color: #fff; font-weight: 700;" onclick="window.app.openLiveRoom('${sess.id}')">
+                    <i class="fa-solid fa-video"></i> Start / Enter Classroom
+                  </button>
+                  <button type="button" class="btn btn-outline btn-sm danger" style="color: #e11d48; border-color: #fecdd3;" onclick="window.app.mentorEndLiveSession('${sess.id}')" title="Permanently End Masterclass">
+                    <i class="fa-solid fa-stop"></i> End Session
+                  </button>
+                  <button type="button" class="btn btn-outline btn-sm" onclick="window.app.openEditMasterclass('${sess.id}')" title="Edit Masterclass">
+                    <i class="fa-solid fa-pen-to-square"></i> Edit
+                  </button>
+                ` : `
+                  ${!isEnrolled ? `
+                    <button type="button" class="btn ${isFull ? 'btn-secondary' : 'btn-emerald'} btn-sm" ${isFull ? 'disabled' : ''} onclick="window.app.enrollInLiveCohort('${sess.id}')">
+                      ${isFull ? 'FULL' : 'Join Live Session'}
+                    </button>
+                  ` : `
+                    <button type="button" class="btn btn-emerald btn-sm" style="background: #059669; color: #fff; font-weight: 700;" onclick="window.app.openLiveRoom('${sess.id}')">
+                      <i class="fa-solid fa-video"></i> Join Live Session
+                    </button>
+                  `}
+                `}
                 <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.openMasterclassDetailsPage('${sess.id}')">
                   View Details
                 </button>
@@ -9441,7 +10120,12 @@
         if (!res.ok) {
           throw new Error(data.error || data.message || 'Failed to accept session');
         }
-        this.showToast('🎉 Swap Session Accepted! Requester notified.', 'check');
+        this.notify({
+          title: '✅ Skill Swap Session Confirmed',
+          message: 'Swap session accepted! Requester notified and session scheduled.',
+          type: 'check',
+          target_page: 'view-sessions'
+        });
         await window.store.fetchSessions();
         await this.renderSessions();
       } catch (err) {
@@ -9463,6 +10147,12 @@
         if (!res.ok) {
           throw new Error(data.error || data.message || 'Failed to decline session');
         }
+        this.notify({
+          title: '❌ Skill Swap Request Declined',
+          message: 'Swap session request declined. Escrow credits refunded.',
+          type: 'info',
+          target_page: 'view-sessions'
+        });
         this.showToast('ℹ️ Swap session request declined. Escrow refunded to requester.', 'info');
         await window.store.fetchSessions();
         await window.store.fetchWallet();
@@ -9713,6 +10403,20 @@
 
       if (!session) return;
 
+      const timing = this.getScheduledTiming(session);
+      const isCompleted = ['COMPLETED', 'ENDED'].includes((session.status || '').toUpperCase()) || timing.isPastEnd;
+      if (isCompleted) {
+        alert('This masterclass has already concluded or reached its scheduled duration.');
+        this.switchView('view-sessions');
+        return;
+      }
+
+      if (!timing.isStarted) {
+        alert(`This session is scheduled to start at ${session.time || 'the scheduled time'} (${session.date || ''}). The classroom activates automatically when the scheduled time arrives.`);
+        this.switchView('view-sessions');
+        return;
+      }
+
       const isCohort = session.session_type === 'GROUP_COHORT';
       const isTutor = (session.teacher_id === currentPersona.id || session.teacher?.id === currentPersona.id);
       const tutorName = session.teacher?.name || session.teacherName || session.teacher_id || 'Instructor';
@@ -9807,6 +10511,44 @@
           sidebarCompleteBtn.innerHTML = `<i class="fa-solid fa-coins"></i> Conclude Session & Rate`;
           sidebarCompleteBtn.onclick = () => this.openReviewModal(session.id);
         }
+      }
+
+      if (isCohort) {
+        if (completeBtn) {
+          if (isTutor) {
+            completeBtn.style.display = 'inline-flex';
+            completeBtn.className = 'btn btn-danger btn-sm';
+            completeBtn.innerHTML = `<i class="fa-solid fa-stop"></i> End Masterclass Session`;
+            completeBtn.onclick = () => this.mentorEndLiveSession(session.id);
+          } else {
+            completeBtn.style.display = 'none';
+          }
+        }
+      }
+
+      let endSessionBtn = document.getElementById('roomEndSessionBtn');
+      if (isTutor) {
+        if (!endSessionBtn) {
+          const leaveBtn = document.getElementById('roomLeaveMeetingBtn');
+          if (leaveBtn && leaveBtn.parentNode) {
+            endSessionBtn = document.createElement('button');
+            endSessionBtn.type = 'button';
+            endSessionBtn.id = 'roomEndSessionBtn';
+            endSessionBtn.className = 'media-ctrl-btn danger-btn';
+            endSessionBtn.title = 'Permanently End Masterclass for All Participants';
+            endSessionBtn.style.cssText = 'background: #dc2626; border-color: #b91c1c; color: #ffffff; margin-left: 0.5rem;';
+            endSessionBtn.innerHTML = `
+              <i class="fa-solid fa-stop" style="color: #fff;"></i>
+              <span class="ctrl-label" style="color: #fff; font-weight: 700;">End Session</span>
+            `;
+            endSessionBtn.addEventListener('click', () => this.mentorEndLiveSession(session.id));
+            leaveBtn.parentNode.insertBefore(endSessionBtn, leaveBtn.nextSibling);
+          }
+        } else {
+          endSessionBtn.style.display = 'inline-flex';
+        }
+      } else if (endSessionBtn) {
+        endSessionBtn.style.display = 'none';
       }
 
       // Start dynamic session countdown timer based on meeting_started_at and hours
@@ -10269,2749 +11011,50 @@
                         await this.renderChatMessages(data.event !== 'chat_read' && data.event !== 'chat_delivered');
 
                         // Automatically mark as read if active receiver
-                        if (isIncoming && this.activeChatContact === senderId) {
-                          await window.store.markChatAsRead(senderId);
-                          const updated = await window.store.fetchConversations();
-                          this.chatConversations = updated || [];
-                          this.renderChatContacts();
+                        if (isIncoming && current) {
+                          try {
+                            await window.store.markConversationAsRead(senderId);
+                          } catch (e) {}
                         }
-                      }
-                    } else if (isIncoming) {
-                      if (data.senderName && data.message?.text) {
-                        this.showToast(`💬 New message from ${data.senderName}: "${data.message.text.substring(0, 30)}"`, 'message');
                       }
                     }
                   }
                 }
               } catch (e) {
-                console.warn('Chat realtime message parse error:', e);
+                console.error('WebSocket chat message parse error:', e);
               }
+            };
+
+            ws.onerror = (e) => {
+              console.warn('Signaling WebSocket error:', e);
             };
 
             ws.onclose = () => {
               setTimeout(() => {
-                connectWs();
-              }, 3000);
+                this.initChatRealtimeListener();
+              }, 5000);
             };
-
-            ws.onerror = () => {
-              try { ws.close(); } catch (e) { }
-            };
-          } catch (err) {
-            setTimeout(connectWs, 3000);
+          } catch (e) {
+            console.warn('WebSocket init failed:', e);
           }
         };
 
         connectWs();
       } catch (err) {
-        console.warn('Real-time chat socket listener notice:', err);
+        console.warn('Chat realtime listener init error:', err);
       }
-    },
-
-    startDirectChat(contactId) {
-      this.activeChatContact = contactId;
-      this.switchView('view-chat');
-      this.renderChat();
-    },
-
-    async renderChat() {
-      const current = window.store.getCurrentPersona();
-      try {
-        const serverConvs = await window.store.fetchConversations();
-        this.chatConversations = serverConvs || [];
-      } catch (e) {
-        this.chatConversations = [];
-      }
-
-      this.renderChatContacts();
-
-      const peers = Object.values(window.store.personas).filter(p => p && p.id !== current?.id && !p.isAdmin && !p.is_admin);
-      if (!this.activeChatContact || (!peers.some(p => p.id === this.activeChatContact) && !this.chatConversations.some(c => c.peer_id === this.activeChatContact))) {
-        this.activeChatContact = this.chatConversations[0]?.peer_id || peers[0]?.id || null;
-      }
-
-      if (this.activeChatContact) {
-        // Mark as read when entering active chat
-        await window.store.markChatAsRead(this.activeChatContact).catch(() => { });
-        const serverConvs = await window.store.fetchConversations();
-        this.chatConversations = serverConvs || [];
-        this.renderChatContacts();
-      }
-
-      await this.renderChatMessages(true);
-      this.startChatLivePolling();
-    },
-
-    renderChatContacts() {
-      const contactsList = document.getElementById('chatContactsList');
-      if (!contactsList) return;
-
-      const current = window.store.getCurrentPersona();
-      const allPeers = Object.values(window.store.personas).filter(p => p && p.id !== current?.id && !p.isAdmin && !p.is_admin);
-
-      // Start with server conversations which are already sorted by latest message created_at DESC
-      const convList = (this.chatConversations || []).map(conv => ({
-        peer_id: conv.peer_id || conv.peer?.id,
-        name: conv.name || conv.peer?.name || conv.peer_id,
-        major: conv.major || conv.peer?.major || 'Vignan Student',
-        topSkill: conv.topSkill || conv.peer?.skillsOffered?.[0]?.name || 'Peer Mentor',
-        rate: conv.rate || conv.peer?.skillsOffered?.[0]?.rate || 2.5,
-        tier: conv.tier || conv.peer?.skillsOffered?.[0]?.tier || 'Elite Master',
-        last_message: conv.last_message_preview || conv.last_message || conv.text || null,
-        last_message_type: conv.last_message_type || (conv.audio_data ? 'voice' : 'text'),
-        last_message_time: conv.last_message_time || conv.time || '',
-        last_message_created_at: conv.last_message_created_at || conv.created_at || null,
-        unread_count: Number(conv.unread_count || conv.unreadCount || 0)
-      }));
-
-      // Add any peers that don't have conversations yet
-      const existingIds = new Set(convList.map(c => c.peer_id));
-      allPeers.forEach(peer => {
-        if (peer && peer.id && !existingIds.has(peer.id)) {
-          convList.push({
-            peer_id: peer.id,
-            name: peer.name || peer.id,
-            major: peer.major || 'Vignan Student',
-            topSkill: peer.skillsOffered?.[0]?.name || 'Peer Mentor',
-            rate: peer.skillsOffered?.[0]?.rate || 2.5,
-            tier: peer.skillsOffered?.[0]?.tier || 'Elite Master',
-            last_message: null,
-            last_message_type: 'text',
-            last_message_time: '',
-            last_message_created_at: null,
-            unread_count: 0
-          });
-        }
-      });
-
-      // WhatsApp Sorting:
-      // 1. Conversations with recent messages sorted by created_at DESC (newest at very top)
-      // 2. Remaining peers sorted alphabetically
-      convList.sort((a, b) => {
-        const timeA = a.last_message_created_at ? new Date(a.last_message_created_at).getTime() : 0;
-        const timeB = b.last_message_created_at ? new Date(b.last_message_created_at).getTime() : 0;
-        if (timeA !== timeB) {
-          return timeB - timeA;
-        }
-        return (a.name || '').localeCompare(b.name || '');
-      });
-
-      // Update total unread badges
-      const totalUnread = convList.reduce((sum, c) => sum + (c.unread_count || 0), 0);
-      const totalBadge = document.getElementById('chatTotalUnreadBadge');
-      if (totalBadge) {
-        totalBadge.textContent = totalUnread;
-        totalBadge.style.display = totalUnread > 0 ? 'inline-block' : 'none';
-      }
-
-      const sidebarBadge = document.getElementById('sidebarChatBadge');
-      if (sidebarBadge) {
-        sidebarBadge.textContent = totalUnread;
-        sidebarBadge.style.display = totalUnread > 0 ? 'inline-block' : 'none';
-      }
-
-      let filteredContacts = convList;
-      if (this.chatSearchQuery) {
-        filteredContacts = convList.filter(c =>
-          (c.name || '').toLowerCase().includes(this.chatSearchQuery) ||
-          (c.topSkill || '').toLowerCase().includes(this.chatSearchQuery) ||
-          (c.major || '').toLowerCase().includes(this.chatSearchQuery)
-        );
-      }
-
-      if (filteredContacts.length === 0) {
-        contactsList.innerHTML = `
-          <div style="text-align: center; padding: 2rem 1rem; color: var(--text-muted); font-size: 0.85rem;">
-            <i class="fa-solid fa-magnifying-glass" style="margin-bottom: 0.5rem; font-size: 1.2rem; display: block;"></i>
-            No conversations match "${this.escapeHtml(this.chatSearchQuery)}"
-          </div>
-        `;
-        return;
-      }
-
-      contactsList.innerHTML = filteredContacts.map(contact => {
-        const isSelected = this.activeChatContact === contact.peer_id;
-        const unreadCount = Number(contact.unread_count || 0);
-        const isVoice = contact.last_message_type === 'voice';
-
-        let lastMsgSnippet = contact.last_message || `${contact.topSkill} • ${contact.rate} Cr/hr`;
-        if (isVoice) {
-          lastMsgSnippet = `<span style="color: #10b981; font-weight: ${unreadCount > 0 ? '700' : '600'};"><i class="fa-solid fa-microphone"></i> Voice message</span>`;
-        } else if (contact.last_message) {
-          lastMsgSnippet = this.escapeHtml(contact.last_message);
-        }
-
-        const nameWeight = unreadCount > 0 ? '800' : '700';
-        const timeColor = unreadCount > 0 ? '#10b981' : 'var(--text-muted)';
-        const previewColor = unreadCount > 0 ? 'var(--text-primary)' : 'var(--text-secondary)';
-        const previewWeight = unreadCount > 0 ? '700' : '400';
-
-        return `
-          <div class="chat-contact-item ${isSelected ? 'active' : ''} ${unreadCount > 0 ? 'has-unread' : ''}" onclick="window.app.selectChatContact('${contact.peer_id}')" style="cursor: pointer; padding: 0.75rem 0.85rem; border-radius: var(--radius-md); margin-bottom: 0.35rem; display: flex; gap: 0.75rem; align-items: center; transition: all 0.2s ease; ${unreadCount > 0 ? 'background: rgba(16, 185, 129, 0.05);' : ''}">
-            <div style="position: relative; flex-shrink: 0;">
-              ${window.getUserLogoCardHtml ? window.getUserLogoCardHtml(contact.peer_id, 44) : `<img src="${window.getStudentAvatar(contact.peer_id)}" style="width:44px;height:44px;border-radius:50%;object-fit:cover;">`}
-              <span class="online-indicator" style="position: absolute; bottom: 0; right: 0; width: 10px; height: 10px; background: #10b981; border: 2px solid var(--bg-card); border-radius: 50%;"></span>
-            </div>
-            <div style="flex: 1; overflow: hidden; min-width: 0;">
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.2rem;">
-                <div style="font-weight: ${nameWeight}; font-size: 0.9rem; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                  ${this.escapeHtml(contact.name)}
-                </div>
-                <span style="font-size: 0.7rem; color: ${timeColor}; font-weight: ${unreadCount > 0 ? '800' : '600'}; white-space: nowrap; margin-left: 0.4rem;">
-                  ${contact.last_message_time || 'Active'}
-                </span>
-              </div>
-              <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;">
-                <div style="font-size: 0.78rem; color: ${previewColor}; font-weight: ${previewWeight}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1;">
-                  ${lastMsgSnippet}
-                </div>
-                ${unreadCount > 0 ? `
-                  <span class="chat-unread-badge" style="background: #10b981; color: #fff; font-size: 0.72rem; font-weight: 800; min-width: 20px; height: 20px; border-radius: 999px; display: flex; align-items: center; justify-content: center; padding: 0 5px; flex-shrink: 0; box-shadow: 0 2px 6px rgba(16,185,129,0.35);">
-                    ${unreadCount}
-                  </span>
-                ` : ''}
-              </div>
-            </div>
-          </div>
-        `;
-      }).join('');
-    },
-
-    async selectChatContact(cId) {
-      this.activeChatContact = cId;
-      const chatLayout = document.querySelector('.whatsapp-chat-layout');
-      if (chatLayout) chatLayout.classList.add('show-chat-window');
-
-      // 1. Mark as read on backend
-      try {
-        await window.store.markChatAsRead(cId);
-        const serverConvs = await window.store.fetchConversations();
-        this.chatConversations = serverConvs || [];
-      } catch (e) { }
-
-      // 2. Re-render contact list to immediately clear badge
-      this.renderChatContacts();
-      this.updateSidebarBadges();
-      await this.renderChatMessages(true);
-    },
-
-    startChatLivePolling() {
-      if (this.chatPollInterval) clearInterval(this.chatPollInterval);
-      this.chatPollInterval = setInterval(async () => {
-        if (this.currentTab === 'view-chat') {
-          try {
-            const serverConvs = await window.store.fetchConversations();
-            this.chatConversations = serverConvs || [];
-            this.renderChatContacts();
-            if (this.activeChatContact) {
-              await this.renderChatMessages(false);
-            }
-          } catch (e) { }
-        }
-      }, 2000);
-    },
-
-    stopChatLivePolling() {
-      if (this.chatPollInterval) {
-        clearInterval(this.chatPollInterval);
-        this.chatPollInterval = null;
-      }
-    },
-
-    async renderChatMessages(forceScrollBottom = false) {
-      if (!this.activeChatContact) return;
-
-      const peer = window.store.personas[this.activeChatContact] || {
-        id: this.activeChatContact,
-        name: this.activeChatContact,
-        skillsOffered: [{ name: 'Peer Mentor', rate: 2.5, tier: 'Elite Master' }]
-      };
-
-      const nameEl = document.getElementById('activeChatName');
-      if (nameEl) nameEl.textContent = peer.name;
-
-      const avatarEl = document.getElementById('activeChatAvatar');
-      if (avatarEl) avatarEl.src = window.getStudentAvatar(peer.id);
-
-      const statusEl = document.getElementById('activeChatStatus');
-      if (statusEl) {
-        const topSkill = peer.skillsOffered?.[0] || { name: 'Peer Mentor', rate: 2.5, tier: 'Elite Master' };
-        statusEl.innerHTML = `● Active Now • <strong>${this.escapeHtml(topSkill.name)}</strong> (${topSkill.rate || 2.5} Cr/hr • ${this.escapeHtml(topSkill.tier || 'Elite')})`;
-      }
-
-      const msgContainer = document.getElementById('chatMessagesContainer');
-      if (!msgContainer) return;
-
-      const rawMessages = await window.store.fetchChatMessages(this.activeChatContact);
-      const seenIds = new Set();
-      const messages = [];
-      (rawMessages || []).forEach(m => {
-        if (m && m.id && !seenIds.has(m.id)) {
-          seenIds.add(m.id);
-          messages.push(m);
-        }
-      });
-
-      this.currentChatMessages = messages;
-      const current = window.store.getCurrentPersona();
-
-      const wasNearBottom = msgContainer.scrollHeight - msgContainer.scrollTop - msgContainer.clientHeight < 90;
-
-      const e2eHeaderHtml = `
-        <div class="chat-e2e-notice">
-          <i class="fa-solid fa-lock"></i>
-          <span>Messages and voice notes are end-to-end encrypted. No one outside of this chat can read or listen to them.</span>
-        </div>
-      `;
-
-      if (!messages || messages.length === 0) {
-        msgContainer.innerHTML = e2eHeaderHtml + `
-          <div style="text-align: center; padding: 2.5rem 1.5rem; color: var(--text-muted); display: flex; flex-direction: column; align-items: center; justify-content: center; height: 75%;">
-            <div style="width: 58px; height: 58px; border-radius: 50%; background: rgba(16,185,129,0.12); display: flex; align-items: center; justify-content: center; font-size: 1.6rem; color: #10b981; margin-bottom: 0.85rem;">
-              <i class="fa-solid fa-comments"></i>
-            </div>
-            <h4 style="font-weight: 800; font-size: 1.05rem; color: var(--text-primary); margin-bottom: 0.35rem;">Direct Messaging with ${this.escapeHtml(peer.name)}</h4>
-            <p style="font-size: 0.82rem; max-width: 360px; line-height: 1.45; margin-bottom: 1.25rem;">
-              Send instant text messages or hold the 🎙️ mic button to record voice notes in real-time.
-            </p>
-            <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: center; max-width: 440px;">
-              <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.sendQuickChatMessage('👋 Hi ${this.escapeQuotes(peer.name)}, are you available for a skill swap session?')">
-                👋 "Hi ${this.escapeHtml(peer.name)}, are you free for a swap?"
-              </button>
-              <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.sendQuickChatMessage('💡 I want to learn ${this.escapeQuotes(peer.skillsOffered?.[0]?.name || 'your courses')}!')">
-                💡 "I want to learn ${this.escapeHtml(peer.skillsOffered?.[0]?.name || 'courses')}!"
-              </button>
-              <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.sendQuickChatMessage('📅 Can we schedule a 1-on-1 session this week?')">
-                📅 "Can we schedule a 1-on-1 session?"
-              </button>
-            </div>
-          </div>
-        `;
-      } else {
-        msgContainer.innerHTML = e2eHeaderHtml + messages.map(msg => {
-          const isOut = msg.sender_id === current?.id;
-          const isVoice = msg.message_type === 'voice' || Boolean(msg.audio_data);
-          const duration = msg.audio_duration || 5;
-          const isRead = msg.status === 'READ';
-          const isDelivered = msg.status === 'DELIVERED' || isRead;
-          const checkColor = isRead ? '#53bdeb' : 'var(--text-muted)';
-          const checkIcon = isDelivered ? 'fa-check-double' : 'fa-check';
-          const checkTitle = isRead ? 'Read' : (isDelivered ? 'Delivered' : 'Sent');
-
-          const rawCreated = msg.created_at || msg.created_at_ms;
-          let msgTimeDisplay = msg.time || 'Just now';
-          if (rawCreated) {
-            try {
-              const d = new Date(rawCreated);
-              if (!isNaN(d.getTime())) {
-                msgTimeDisplay = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-              }
-            } catch (e) { }
-          }
-
-          if (isVoice) {
-            const player = this.activeVoicePlayers[msg.id];
-            const isPlaying = player && !player.audio.paused;
-            const currentSpeed = player?.speed || 1.0;
-            const curTime = player?.audio ? (player.audio.currentTime || 0) : 0;
-            const dur = (player?.audio && player.audio.duration && isFinite(player.audio.duration) && player.audio.duration > 0)
-              ? player.audio.duration
-              : (msg.audio_duration || duration || 1);
-            const pct = dur > 0 ? Math.min(100, Math.max(0, (curTime / dur) * 100)) : 0;
-            const timeText = this.formatTimeMMSS(Math.floor(curTime));
-
-            let waveformArr = msg.audio_waveform || msg.waveform;
-            if (!Array.isArray(waveformArr) || waveformArr.length === 0) {
-              waveformArr = this.generateFallbackWaveform(45, msg.id || '');
-            }
-
-            const activeBarCount = Math.floor((pct / 100) * waveformArr.length);
-
-            const barsHtml = waveformArr.map((amp, idx) => {
-              const h = Math.max(4, Math.round((amp || 0.3) * 22));
-              const isPlayed = idx <= activeBarCount && pct > 0;
-              return `<span class="v-bar ${isPlayed ? 'played' : ''}" style="height: ${h}px;" data-bar-idx="${idx}"></span>`;
-            }).join('');
-
-            return `
-              <div class="message-bubble ${isOut ? 'outgoing' : 'incoming'} voice-bubble-wrapper" id="msgBubble_${msg.id}">
-                <div class="chat-voice-bubble">
-                  <button type="button" class="voice-bubble-play-btn" onclick="window.app.playVoiceMessage('${msg.id}')">
-                    <i class="fa-solid ${isPlaying ? 'fa-pause' : 'fa-play'}" id="voicePlayIcon_${msg.id}"></i>
-                  </button>
-                  <div class="voice-waveform-track-wrapper">
-                    <div class="voice-waveform-container" id="waveformContainer_${msg.id}" onclick="window.app.seekVoiceWaveform('${msg.id}', event)">
-                      <div class="voice-waveform-bars" id="waveformBars_${msg.id}">
-                        ${barsHtml}
-                      </div>
-                      <div class="voice-waveform-marker" id="waveformMarker_${msg.id}" style="left: ${pct}%;"></div>
-                    </div>
-                    <div class="voice-time-row">
-                      <span class="voice-time-label" id="voiceCurTime_${msg.id}">${timeText}</span>
-                      <div style="display: flex; align-items: center; gap: 0.35rem;">
-                        <button type="button" class="voice-speed-pill" onclick="window.app.toggleVoiceSpeed('${msg.id}', this)">${currentSpeed}x</button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                <div class="message-time">
-                  <span>${msgTimeDisplay}</span>
-                  ${isOut ? `<span class="chat-read-receipt" style="color: ${checkColor}; margin-left: 4px; font-size: 0.72rem;" title="${checkTitle}"><i class="fa-solid ${checkIcon}"></i></span>` : ''}
-                </div>
-              </div>
-            `;
-          }
-
-          return `
-            <div class="message-bubble ${isOut ? 'outgoing' : 'incoming'}">
-              <div class="message-text">${this.escapeHtml(msg.text)}</div>
-              <div class="message-time">
-                <span>${msgTimeDisplay}</span>
-                ${isOut ? `<span class="chat-read-receipt" style="color: ${checkColor}; margin-left: 4px; font-size: 0.72rem;" title="${checkTitle}"><i class="fa-solid ${checkIcon}"></i></span>` : ''}
-              </div>
-            </div>
-          `;
-        }).join('');
-      }
-
-      if (forceScrollBottom || wasNearBottom) {
-        msgContainer.scrollTop = msgContainer.scrollHeight;
-      }
-    },
-
-    // ==========================================
-    // Voice Message Recording Lifecycle (MediaRecorder)
-    // ==========================================
-    async startVoiceRecording() {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        this.showToast('Audio recording is not supported in this browser.', 'triangle-exclamation');
-        return;
-      }
-
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true
-          }
-        });
-        this.voiceMediaStream = stream;
-        this.voiceAudioChunks = [];
-        this.voiceRecordSeconds = 0;
-
-        let mimeType = '';
-        if (typeof MediaRecorder !== 'undefined') {
-          if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
-            mimeType = 'audio/webm;codecs=opus';
-          } else if (MediaRecorder.isTypeSupported('audio/webm')) {
-            mimeType = 'audio/webm';
-          } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
-            mimeType = 'audio/mp4';
-          } else if (MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')) {
-            mimeType = 'audio/ogg;codecs=opus';
-          }
-        }
-
-        const options = mimeType ? { mimeType } : {};
-        const mediaRecorder = new MediaRecorder(stream, options);
-
-        mediaRecorder.ondataavailable = (event) => {
-          if (event.data && event.data.size > 0) {
-            this.voiceAudioChunks.push(event.data);
-          }
-        };
-
-        mediaRecorder.onstop = () => {
-          const blobType = mediaRecorder.mimeType || mimeType || 'audio/webm';
-          const blob = new Blob(this.voiceAudioChunks, { type: blobType });
-
-          if (!blob || blob.size === 0) {
-            this.showToast('Unable to record audio. Please try again.', 'triangle-exclamation');
-            this.discardVoicePreview();
-            return;
-          }
-
-          this.voicePreviewBlob = blob;
-          this.voicePreviewDuration = Math.max(1, this.voiceRecordSeconds);
-
-          if (this.voicePreviewObjectUrl) {
-            URL.revokeObjectURL(this.voicePreviewObjectUrl);
-            this.voicePreviewObjectUrl = null;
-          }
-          this.voicePreviewObjectUrl = URL.createObjectURL(blob);
-          this.setupVoicePreviewUI();
-
-          if (this.voiceMediaStream) {
-            this.voiceMediaStream.getTracks().forEach(t => t.stop());
-            this.voiceMediaStream = null;
-          }
-        };
-
-        this.voiceMediaRecorder = mediaRecorder;
-        mediaRecorder.start(250);
-
-        const formEl = document.getElementById('chatForm');
-        const recordingStrip = document.getElementById('chatVoiceRecordingStrip');
-        const previewStrip = document.getElementById('chatVoicePreviewStrip');
-        if (formEl) formEl.style.display = 'none';
-        if (previewStrip) previewStrip.style.display = 'none';
-        if (recordingStrip) recordingStrip.style.display = 'flex';
-
-        const timerEl = document.getElementById('chatVoiceRecordTimer');
-        if (timerEl) timerEl.textContent = '00:00';
-
-        if (this.voiceRecordingTimer) clearInterval(this.voiceRecordingTimer);
-        this.voiceRecordingTimer = setInterval(() => {
-          this.voiceRecordSeconds++;
-          if (timerEl) timerEl.textContent = this.formatTimeMMSS(this.voiceRecordSeconds);
-          if (this.voiceRecordSeconds >= 300) {
-            this.stopVoiceRecording();
-          }
-        }, 1000);
-
-        this.showToast('🎙️ Recording your voice... Speak now!', 'microphone');
-      } catch (err) {
-        console.error('Microphone access error:', err);
-        const isPermission = err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError';
-        if (isPermission) {
-          this.showToast('Microphone permission is required to send voice messages.', 'microphone');
-        } else {
-          this.showToast('Could not open microphone: ' + (err.message || 'Device error'), 'triangle-exclamation');
-        }
-      }
-    },
-
-    stopVoiceRecording() {
-      if (this.voiceRecordingTimer) {
-        clearInterval(this.voiceRecordingTimer);
-        this.voiceRecordingTimer = null;
-      }
-
-      if (this.voiceMediaRecorder && this.voiceMediaRecorder.state !== 'inactive') {
-        this.voiceMediaRecorder.stop();
-      }
-    },
-
-    cancelVoiceRecording() {
-      this.isSyntheticRecording = false;
-      if (this.voiceRecordingTimer) {
-        clearInterval(this.voiceRecordingTimer);
-        this.voiceRecordingTimer = null;
-      }
-      if (this.voiceMediaRecorder && this.voiceMediaRecorder.state !== 'inactive') {
-        this.voiceMediaRecorder.stop();
-      }
-      if (this.voiceMediaStream) {
-        this.voiceMediaStream.getTracks().forEach(t => t.stop());
-        this.voiceMediaStream = null;
-      }
-      if (this.voicePreviewObjectUrl) {
-        URL.revokeObjectURL(this.voicePreviewObjectUrl);
-        this.voicePreviewObjectUrl = null;
-      }
-      this.voiceAudioChunks = [];
-      this.voicePreviewBlob = null;
-      this.voicePreviewBase64 = null;
-
-      const formEl = document.getElementById('chatForm');
-      const recordingStrip = document.getElementById('chatVoiceRecordingStrip');
-      const previewStrip = document.getElementById('chatVoicePreviewStrip');
-      if (recordingStrip) recordingStrip.style.display = 'none';
-      if (previewStrip) previewStrip.style.display = 'none';
-      if (formEl) formEl.style.display = 'flex';
-      this.showToast('Voice recording cancelled', 'trash');
-    },
-
-    setupVoicePreviewUI() {
-      const recordingStrip = document.getElementById('chatVoiceRecordingStrip');
-      const previewStrip = document.getElementById('chatVoicePreviewStrip');
-      if (recordingStrip) recordingStrip.style.display = 'none';
-      if (previewStrip) previewStrip.style.display = 'flex';
-
-      const durEl = document.getElementById('chatVoicePreviewDuration');
-      const curEl = document.getElementById('chatVoicePreviewCurrent');
-      const progEl = document.getElementById('chatVoicePreviewProgress');
-      const playIcon = document.getElementById('chatVoicePreviewPlayIcon');
-
-      if (durEl) durEl.textContent = this.formatTimeMMSS(this.voicePreviewDuration);
-      if (curEl) curEl.textContent = '0:00';
-      if (progEl) {
-        progEl.value = 0;
-        progEl.max = this.voicePreviewDuration;
-      }
-      if (playIcon) playIcon.className = 'fa-solid fa-play';
-
-      if (this.voicePreviewAudio) {
-        this.voicePreviewAudio.pause();
-        this.voicePreviewAudio = null;
-      }
-
-      if (!this.voicePreviewObjectUrl) return;
-
-      const audio = new Audio(this.voicePreviewObjectUrl);
-      audio.ontimeupdate = () => {
-        if (curEl) curEl.textContent = this.formatTimeMMSS(Math.floor(audio.currentTime));
-        if (progEl && this.voicePreviewDuration > 0) {
-          progEl.value = audio.currentTime;
-        }
-      };
-      audio.onended = () => {
-        if (playIcon) playIcon.className = 'fa-solid fa-play';
-        if (progEl) progEl.value = 0;
-        if (curEl) curEl.textContent = '0:00';
-      };
-      if (progEl) {
-        progEl.oninput = (e) => {
-          if (audio) audio.currentTime = Number(e.target.value);
-        };
-      }
-
-      this.voicePreviewAudio = audio;
-    },
-
-    toggleVoicePreviewPlayback() {
-      if (!this.voicePreviewAudio) return;
-      const playIcon = document.getElementById('chatVoicePreviewPlayIcon');
-      if (this.voicePreviewAudio.paused) {
-        this.voicePreviewAudio.play().catch(e => console.warn('Preview play warning:', e));
-        if (playIcon) playIcon.className = 'fa-solid fa-pause';
-      } else {
-        this.voicePreviewAudio.pause();
-        if (playIcon) playIcon.className = 'fa-solid fa-play';
-      }
-    },
-
-    discardVoicePreview() {
-      if (this.voicePreviewAudio) {
-        this.voicePreviewAudio.pause();
-        this.voicePreviewAudio = null;
-      }
-      if (this.voicePreviewObjectUrl) {
-        URL.revokeObjectURL(this.voicePreviewObjectUrl);
-        this.voicePreviewObjectUrl = null;
-      }
-      this.voicePreviewBlob = null;
-      this.voicePreviewBase64 = null;
-
-      const formEl = document.getElementById('chatForm');
-      const previewStrip = document.getElementById('chatVoicePreviewStrip');
-      if (previewStrip) previewStrip.style.display = 'none';
-      if (formEl) formEl.style.display = 'flex';
-      this.showToast('Voice preview discarded', 'trash');
-    },
-
-    async extractWaveformFromBlob(blob, numBars = 45) {
-      try {
-        const arrayBuffer = await blob.arrayBuffer();
-        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-        if (!AudioContextClass) return this.generateFallbackWaveform(numBars);
-
-        const audioCtx = new AudioContextClass();
-        const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-        const rawData = audioBuffer.getChannelData(0);
-        const totalSamples = rawData.length;
-        const blockSize = Math.floor(totalSamples / numBars) || 1;
-        const rawBars = [];
-
-        for (let i = 0; i < numBars; i++) {
-          const start = i * blockSize;
-          let sum = 0;
-          let count = 0;
-          for (let j = 0; j < blockSize && (start + j) < totalSamples; j++) {
-            const val = rawData[start + j];
-            sum += val * val;
-            count++;
-          }
-          const rms = count > 0 ? Math.sqrt(sum / count) : 0;
-          rawBars.push(rms);
-        }
-
-        const maxRms = Math.max(...rawBars) || 1;
-        const normalized = rawBars.map(val => {
-          const norm = maxRms > 0 ? (val / maxRms) : 0.2;
-          return Number(Math.max(0.18, Math.min(1.0, norm)).toFixed(2));
-        });
-
-        try { audioCtx.close(); } catch (e) { }
-        return normalized;
-      } catch (err) {
-        console.warn('AudioContext decode waveform notice:', err);
-        return this.generateFallbackWaveform(numBars);
-      }
-    },
-
-    generateFallbackWaveform(numBars = 45, seedStr = '') {
-      const bars = [];
-      let seed = 0;
-      for (let i = 0; i < seedStr.length; i++) {
-        seed = (seed << 5) - seed + seedStr.charCodeAt(i);
-        seed |= 0;
-      }
-      for (let i = 0; i < numBars; i++) {
-        const pseudo = Math.abs(Math.sin((i + 1) * 0.45 + seed) * Math.cos((i + 1) * 0.28));
-        const norm = Math.max(0.18, Math.min(1.0, 0.2 + pseudo * 0.8));
-        bars.push(Number(norm.toFixed(2)));
-      }
-      return bars;
-    },
-
-    async sendVoicePreview() {
-      if (!this.voicePreviewBlob || !this.activeChatContact) return;
-
-      const sendBtn = document.getElementById('chatSendVoiceBtn');
-      const origHtml = sendBtn ? sendBtn.innerHTML : '';
-      if (sendBtn) {
-        sendBtn.disabled = true;
-        sendBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Uploading...';
-      }
-
-      try {
-        if (this.voicePreviewAudio) {
-          this.voicePreviewAudio.pause();
-          this.voicePreviewAudio = null;
-        }
-
-        let waveform = null;
-        try {
-          waveform = await this.extractWaveformFromBlob(this.voicePreviewBlob, 45);
-        } catch (e) {
-          waveform = this.generateFallbackWaveform(45);
-        }
-
-        // 1. Upload binary audio Blob to persistent storage
-        const uploadRes = await window.store.uploadVoiceAudio(this.voicePreviewBlob, this.voicePreviewDuration);
-        const persistentUrl = uploadRes.audioUrl;
-
-        // 2. Send chat message referencing persistent audio URL + decoded waveform
-        await window.store.sendVoiceMessage(this.activeChatContact, persistentUrl, this.voicePreviewDuration, waveform);
-
-        if (this.voicePreviewObjectUrl) {
-          URL.revokeObjectURL(this.voicePreviewObjectUrl);
-          this.voicePreviewObjectUrl = null;
-        }
-        this.voicePreviewBlob = null;
-        this.voicePreviewDuration = 0;
-
-        const formEl = document.getElementById('chatForm');
-        const previewStrip = document.getElementById('chatVoicePreviewStrip');
-        if (previewStrip) previewStrip.style.display = 'none';
-        if (formEl) formEl.style.display = 'flex';
-
-        await this.renderChat();
-        await this.renderChatMessages(true);
-        this.showToast('🎤 Voice message sent!', 'check');
-      } catch (err) {
-        console.error('Error sending voice message:', err);
-        this.showToast(err.message || 'Could not send voice message', 'triangle-exclamation');
-      } finally {
-        if (sendBtn) {
-          sendBtn.disabled = false;
-          sendBtn.innerHTML = origHtml;
-        }
-      }
-    },
-
-    // ==========================================
-    // Voice Bubble Audio Player Controller
-    // ==========================================
-    playVoiceMessage(msgId, fallbackAudioSrc, durationSec) {
-      if (this.voicePreviewAudio && !this.voicePreviewAudio.paused) {
-        this.voicePreviewAudio.pause();
-        const prevIcon = document.getElementById('chatVoicePreviewPlayIcon');
-        if (prevIcon) prevIcon.className = 'fa-solid fa-play';
-      }
-
-      const updateProgressUI = (playerObj) => {
-        if (!playerObj || !playerObj.audio) return;
-        const audio = playerObj.audio;
-        const playIcon = document.getElementById(`voicePlayIcon_${msgId}`);
-        const marker = document.getElementById(`waveformMarker_${msgId}`);
-        const barsContainer = document.getElementById(`waveformBars_${msgId}`);
-        const curTimeDisplay = document.getElementById(`voiceCurTime_${msgId}`);
-
-        const dur = (audio.duration && isFinite(audio.duration) && audio.duration > 0) ? audio.duration : playerObj.duration;
-        const cur = audio.currentTime || 0;
-        const pct = dur > 0 ? Math.min(100, Math.max(0, (cur / dur) * 100)) : 0;
-
-        if (marker) {
-          marker.style.left = `${pct}%`;
-        }
-        if (barsContainer) {
-          const bars = barsContainer.children;
-          const activeCount = Math.floor((pct / 100) * bars.length);
-          for (let i = 0; i < bars.length; i++) {
-            if (i <= activeCount && pct > 0) {
-              bars[i].classList.add('played');
-            } else {
-              bars[i].classList.remove('played');
-            }
-          }
-        }
-        if (curTimeDisplay) {
-          curTimeDisplay.textContent = this.formatTimeMMSS(Math.floor(cur));
-        }
-        if (playIcon) {
-          playIcon.className = audio.paused ? 'fa-solid fa-play' : 'fa-solid fa-pause';
-        }
-      };
-
-      const existing = this.activeVoicePlayers[msgId];
-      if (existing) {
-        if (existing.audio.paused) {
-          Object.keys(this.activeVoicePlayers).forEach(id => {
-            if (id !== msgId && !this.activeVoicePlayers[id].audio.paused) {
-              this.activeVoicePlayers[id].audio.pause();
-              const otherIcon = document.getElementById(`voicePlayIcon_${id}`);
-              if (otherIcon) otherIcon.className = 'fa-solid fa-play';
-            }
-          });
-
-          if (existing.audio.ended || existing.audio.currentTime >= existing.duration) {
-            existing.audio.currentTime = 0;
-          }
-
-          existing.audio.play().catch(e => console.warn('Audio play error:', e));
-        } else {
-          existing.audio.pause();
-        }
-        updateProgressUI(existing);
-        return;
-      }
-
-      const msg = (this.currentChatMessages || []).find(m => m.id === msgId);
-      let audioSrc = msg?.audio_url || msg?.audio_data || fallbackAudioSrc;
-      if (!audioSrc || typeof audioSrc !== 'string' || audioSrc.trim() === '') {
-        this.showToast('Voice message unavailable', 'triangle-exclamation');
-        return;
-      }
-
-      if (audioSrc.startsWith('/')) {
-        audioSrc = window.location.origin + audioSrc;
-      }
-
-      Object.keys(this.activeVoicePlayers).forEach(id => {
-        if (!this.activeVoicePlayers[id].audio.paused) {
-          this.activeVoicePlayers[id].audio.pause();
-          const otherIcon = document.getElementById(`voicePlayIcon_${id}`);
-          if (otherIcon) otherIcon.className = 'fa-solid fa-play';
-        }
-      });
-
-      const audio = new Audio(audioSrc);
-      audio.preload = 'auto';
-      audio.volume = 1.0;
-      audio.muted = false;
-
-      const totalDuration = msg?.audio_duration || durationSec || 1;
-
-      const playerObj = {
-        audio,
-        speed: 1.0,
-        duration: totalDuration
-      };
-      this.activeVoicePlayers[msgId] = playerObj;
-
-      audio.onloadedmetadata = () => {
-        if (audio.duration && isFinite(audio.duration) && audio.duration > 0) {
-          playerObj.duration = audio.duration;
-        }
-        updateProgressUI(playerObj);
-      };
-
-      audio.ontimeupdate = () => {
-        updateProgressUI(playerObj);
-      };
-
-      audio.onplay = () => {
-        updateProgressUI(playerObj);
-      };
-
-      audio.onpause = () => {
-        updateProgressUI(playerObj);
-      };
-
-      audio.onended = () => {
-        const playIcon = document.getElementById(`voicePlayIcon_${msgId}`);
-        const marker = document.getElementById(`waveformMarker_${msgId}`);
-        const barsContainer = document.getElementById(`waveformBars_${msgId}`);
-        const curTimeDisplay = document.getElementById(`voiceCurTime_${msgId}`);
-        const dur = playerObj.duration;
-
-        if (playIcon) playIcon.className = 'fa-solid fa-play';
-        if (marker) marker.style.left = '100%';
-        if (barsContainer) {
-          const bars = barsContainer.children;
-          for (let i = 0; i < bars.length; i++) {
-            bars[i].classList.add('played');
-          }
-        }
-        if (curTimeDisplay) {
-          curTimeDisplay.textContent = this.formatTimeMMSS(Math.floor(dur));
-        }
-      };
-
-      audio.onerror = (e) => {
-        console.error('Audio playback error for msg:', msgId, e);
-        const playIcon = document.getElementById(`voicePlayIcon_${msgId}`);
-        if (playIcon) playIcon.className = 'fa-solid fa-play';
-        this.showToast('Audio playback error', 'triangle-exclamation');
-      };
-
-      const playPromise = audio.play();
-      if (playPromise !== undefined) {
-        playPromise
-          .then(() => {
-            updateProgressUI(playerObj);
-          })
-          .catch(e => {
-            console.warn('Audio playback start notice:', e.message || e);
-            updateProgressUI(playerObj);
-            const isAbort = e.name === 'AbortError' || (e.message && e.message.includes('interrupted'));
-            if (!isAbort) {
-              this.showToast('Could not play audio: ' + (e.message || 'Playback blocked'), 'triangle-exclamation');
-            }
-          });
-      }
-    },
-
-    seekVoiceWaveform(msgId, event) {
-      const container = document.getElementById(`waveformContainer_${msgId}`) || event.currentTarget;
-      const player = this.activeVoicePlayers[msgId];
-      if (!container) return;
-
-      const rect = container.getBoundingClientRect();
-      const clickX = event.clientX - rect.left;
-      const clickPct = Math.max(0, Math.min(1, clickX / rect.width));
-
-      if (player && player.audio) {
-        const dur = (player.audio.duration && isFinite(player.audio.duration) && player.audio.duration > 0) ? player.audio.duration : player.duration;
-        const seekTime = clickPct * dur;
-        player.audio.currentTime = seekTime;
-
-        const marker = document.getElementById(`waveformMarker_${msgId}`);
-        const barsContainer = document.getElementById(`waveformBars_${msgId}`);
-        const curTimeDisplay = document.getElementById(`voiceCurTime_${msgId}`);
-
-        if (marker) marker.style.left = `${clickPct * 100}%`;
-        if (barsContainer) {
-          const bars = barsContainer.children;
-          const activeCount = Math.floor(clickPct * bars.length);
-          for (let i = 0; i < bars.length; i++) {
-            if (i <= activeCount && clickPct > 0) {
-              bars[i].classList.add('played');
-            } else {
-              bars[i].classList.remove('played');
-            }
-          }
-        }
-        if (curTimeDisplay) {
-          curTimeDisplay.textContent = this.formatTimeMMSS(Math.floor(seekTime));
-        }
-      }
-    },
-
-    toggleVoiceSpeed(msgId, btnEl) {
-      const player = this.activeVoicePlayers[msgId];
-      if (!player) return;
-
-      const speeds = [1.0, 1.5, 2.0];
-      const nextIdx = (speeds.indexOf(player.speed) + 1) % speeds.length;
-      player.speed = speeds[nextIdx];
-      player.audio.playbackRate = player.speed;
-
-      if (btnEl) {
-        btnEl.textContent = `${player.speed}x`;
-      }
-    },
-
-    formatTimeMMSS(sec) {
-      const s = Math.max(0, Math.floor(sec || 0));
-      const mins = Math.floor(s / 60);
-      const secs = s % 60;
-      return `${mins}:${String(secs).padStart(2, '0')}`;
-    },
-
-    async sendQuickChatMessage(quickText) {
-      if (!quickText || !this.activeChatContact) return;
-      try {
-        await window.store.sendMessage(this.activeChatContact, quickText);
-        await this.renderChat();
-        await this.renderChatMessages(true);
-      } catch (err) {
-        console.error('Quick message send error:', err);
-        this.showToast(err.message || 'Could not send message', 'triangle-exclamation');
-      }
-    },
-
-    async renderProfile() {
-      if (window.store?.fetchCertificates) {
-        await window.store.fetchCertificates();
-      }
-      const user = window.store.getCurrentPersona();
-      document.getElementById('profileCardName').textContent = user.name;
-      document.getElementById('profileCardMajor').textContent = user.major;
-      document.getElementById('profileCardBio').textContent = user.bio;
-      document.getElementById('profileCardAvatar').src = window.getStudentAvatar(user.id);
-
-      // Database Storage & Record Metadata Strip
-      const dbStatusEl = document.getElementById('profileCardDbStatus');
-      if (dbStatusEl) dbStatusEl.textContent = 'SQLite / Supabase Synced (Active)';
-      const userIdEl = document.getElementById('profileCardUserId');
-      if (userIdEl) userIdEl.textContent = user.id || 'sri';
-      const loginCountEl = document.getElementById('profileCardLoginCount');
-      if (loginCountEl) {
-        const cnt = user.login_count || user.loginCount || 1;
-        loginCountEl.textContent = `${cnt} ${cnt === 1 ? 'Login' : 'Logins'}`;
-      }
-      const lastLoginEl = document.getElementById('profileCardLastLogin');
-      if (lastLoginEl) {
-        if (user.last_login_at || user.lastLoginAt) {
-          const dateStr = user.last_login_at || user.lastLoginAt;
-          lastLoginEl.textContent = new Date(dateStr).toLocaleString();
-        } else {
-          lastLoginEl.textContent = 'Active Session';
-        }
-      }
-      const rolePillEl = document.getElementById('profileCardRolePill');
-      if (rolePillEl) {
-        const r = user.role || (user.isAdmin ? 'ADMIN' : 'STUDENT');
-        rolePillEl.textContent = r;
-        const rClass = (r === 'ADMIN' || r === 'FACULTY_ADMIN' || r === 'SUPER_ADMIN') ? 'role-admin' : 'role-student';
-        rolePillEl.className = `auth-role-pill ${rClass}`;
-      }
-
-      const badgesContainer = document.getElementById('profileBadgeContainer');
-      if (badgesContainer) {
-        const role = window.store.getUserRole();
-        const roleClass = (role === 'ADMIN' || role === 'FACULTY_ADMIN' || role === 'SUPER_ADMIN') ? 'role-admin' : 'role-student';
-
-        const cfg = window.USER_LOGO_CONFIGS?.[user.id?.toLowerCase()] || {};
-        const roleBadgeHtml = `<span class="auth-role-pill ${roleClass}" style="margin-right: 0.35rem;"><i class="fa-solid fa-shield-halved"></i> ${role}</span>`;
-        const specialtyBadgeHtml = cfg.badgeText ? `<span class="student-badge" style="background: rgba(99,102,241,0.15); color: var(--primary); font-weight: 700; margin-right: 0.35rem;"><i class="fa-solid fa-gem"></i> ${cfg.badgeIcon || '⚡'} ${cfg.badgeText}</span>` : '';
-        const emailBadgeHtml = user.email ? `<span class="student-badge" style="margin-right: 0.35rem;"><i class="fa-regular fa-envelope"></i> ${user.email}</span>` : '';
-
-        badgesContainer.innerHTML = roleBadgeHtml + specialtyBadgeHtml + emailBadgeHtml + (user.badges || []).map(b => `
-          <span class="student-badge"><i class="fa-solid fa-medal" style="color: #f59e0b;"></i> ${b}</span>
-        `).join('');
-      }
-
-      // Update Top-Tier Badge in Header dynamically based on Quiz Scores + Verified Certificates
-      const topTierBadgeEl = document.getElementById('profileCardTopTierBadge');
-      if (topTierBadgeEl) {
-        const certs = user.certificates || [];
-        const hasVerifiedCert = certs.some(c => (c.is_verified === 1 || (c.certificate_status || '').toUpperCase() === 'VERIFIED'));
-        const skills = user.skillsOffered || [];
-        const maxScore = Math.max(0, ...(skills.map(s => Number(s.quiz_score) || 0)));
-
-        if (hasVerifiedCert && maxScore >= 90) {
-          topTierBadgeEl.style.display = 'inline-flex';
-          topTierBadgeEl.style.background = 'rgba(245, 158, 11, 0.15)';
-          topTierBadgeEl.style.color = '#b45309';
-          topTierBadgeEl.style.borderColor = 'rgba(245, 158, 11, 0.4)';
-          topTierBadgeEl.innerHTML = '<i class="fa-solid fa-medal"></i> 🥇 Elite Master Tutor';
-        } else if (hasVerifiedCert && maxScore >= 70) {
-          topTierBadgeEl.style.display = 'inline-flex';
-          topTierBadgeEl.style.background = 'rgba(14, 165, 233, 0.15)';
-          topTierBadgeEl.style.color = '#0369a1';
-          topTierBadgeEl.style.borderColor = 'rgba(14, 165, 233, 0.4)';
-          topTierBadgeEl.innerHTML = '<i class="fa-solid fa-award"></i> 🎖️ Advanced Tutor';
-        } else if (maxScore >= 90) {
-          topTierBadgeEl.style.display = 'inline-flex';
-          topTierBadgeEl.style.background = 'rgba(148, 163, 184, 0.2)';
-          topTierBadgeEl.style.color = '#334155';
-          topTierBadgeEl.style.borderColor = '#94a3b8';
-          topTierBadgeEl.innerHTML = '<i class="fa-solid fa-medal"></i> 🥈 Silver Tutor';
-        } else if (maxScore >= 70) {
-          topTierBadgeEl.style.display = 'inline-flex';
-          topTierBadgeEl.style.background = 'rgba(205, 127, 50, 0.15)';
-          topTierBadgeEl.style.color = '#854d0e';
-          topTierBadgeEl.style.borderColor = 'rgba(205, 127, 50, 0.4)';
-          topTierBadgeEl.innerHTML = '<i class="fa-solid fa-medal"></i> 🥉 Bronze Tutor';
-        } else if (hasVerifiedCert) {
-          topTierBadgeEl.style.display = 'inline-flex';
-          topTierBadgeEl.style.background = 'rgba(16, 185, 129, 0.15)';
-          topTierBadgeEl.style.color = '#047857';
-          topTierBadgeEl.style.borderColor = 'rgba(16, 185, 129, 0.4)';
-          topTierBadgeEl.innerHTML = '<i class="fa-solid fa-certificate"></i> Verified Academic Scholar';
-        } else {
-          topTierBadgeEl.style.display = 'inline-flex';
-          topTierBadgeEl.style.background = 'rgba(100, 116, 139, 0.12)';
-          topTierBadgeEl.style.color = '#475569';
-          topTierBadgeEl.style.borderColor = 'rgba(100, 116, 139, 0.25)';
-          topTierBadgeEl.innerHTML = '<i class="fa-solid fa-user-graduate"></i> Student Peer Learner';
-        }
-      }
-
-      // Render Verified Certificates Showcase
-      const certsGrid = document.getElementById('profileCertificatesGrid');
-      if (certsGrid) {
-        const certs = user.certificates || [];
-        if (certs.length === 0) {
-          certsGrid.innerHTML = `
-            <div style="grid-column: 1/-1; color: var(--text-muted); font-size: 0.88rem; padding: 1rem; background: var(--bg-subtle); border-radius: var(--radius-md);">
-              No external certificates linked yet. Link your NPTEL or other recognized platform certificate to unlock Advanced (2.0 Cr) or Elite Master (2.5 Cr/hr) Tutor Tiers!
-            </div>
-          `;
-        } else {
-          certsGrid.innerHTML = certs.map(c => {
-            const authLower = (c.authority || c.issuer || c.platform || '').toLowerCase();
-            let issuerLogoSvg = window.ISSUER_LOGOS?.vignan || '';
-            if (authLower.includes('nptel')) issuerLogoSvg = window.ISSUER_LOGOS?.nptel || '';
-            else if (authLower.includes('aws')) issuerLogoSvg = window.ISSUER_LOGOS?.aws || '';
-            else if (authLower.includes('google')) issuerLogoSvg = window.ISSUER_LOGOS?.google || '';
-            else if (authLower.includes('microsoft')) issuerLogoSvg = window.ISSUER_LOGOS?.microsoft || '';
-
-            const rawStatus = (c.certificate_status || c.verification_status || c.status || '').toUpperCase();
-            let status = 'PENDING_VERIFICATION';
-            if (rawStatus === 'VERIFIED' || c.is_verified === 1) {
-              status = 'VERIFIED';
-            } else if (rawStatus === 'NOT_VERIFIED' || c.verification_result === 'FAKE' || c.is_verified === -1) {
-              status = 'NOT_VERIFIED';
-            } else if (rawStatus === 'NEEDS_MANUAL_REVIEW' || rawStatus === 'NEEDS_REVIEW' || rawStatus === 'PENDING_FACULTY') {
-              status = 'NEEDS_MANUAL_REVIEW';
-            } else if (c.is_verified === 0 && (c.verification_reason || c.rejection_reason)) {
-              status = 'NOT_VERIFIED';
-            }
-
-            const isVerified = status === 'VERIFIED';
-            const isNotVerified = status === 'NOT_VERIFIED';
-            const isManualReview = status === 'NEEDS_MANUAL_REVIEW';
-
-            let statusBadgeHtml = '';
-            let eligibilityHtml = '';
-            let alertNoticeHtml = '';
-            let cardBgStyle = '';
-
-            if (isVerified) {
-              cardBgStyle = 'background: #f0fdf4; border: 1.5px solid #bbf7d0;';
-              statusBadgeHtml = `<span style="font-size: 0.75rem; font-weight: 800; color: #15803d; background: #dcfce7; padding: 0.25rem 0.65rem; border-radius: var(--radius-full); border: 1px solid #86efac; display: inline-flex; align-items: center; gap: 0.3rem;"><i class="fa-solid fa-circle-check"></i> VERIFIED</span>`;
-              eligibilityHtml = `<div style="font-size: 0.78rem; color: #16a34a; font-weight: 700; margin-top: 0.25rem;"><i class="fa-solid fa-check"></i> Eligible to teach</div>`;
-              alertNoticeHtml = `<div style="margin-top: 0.75rem; padding: 0.65rem 0.85rem; background: rgba(22, 163, 74, 0.08); border: 1px solid rgba(22, 163, 74, 0.25); border-radius: var(--radius-md); font-size: 0.75rem; color: #15803d; display: flex; align-items: flex-start; gap: 0.45rem; line-height: 1.45;"><i class="fa-regular fa-circle-check" style="margin-top: 2px; flex-shrink: 0;"></i> <div><strong>Verification Passed:</strong> Certificate is authentic. Tutor Tier upgraded &amp; Book Swap Mentor Access unlocked. (+2.0 Skill Credits awarded)</div></div>`;
-            } else if (isNotVerified) {
-              cardBgStyle = 'background: #fef2f2; border: 1.5px solid #fecaca;';
-              statusBadgeHtml = `<span style="font-size: 0.75rem; font-weight: 800; color: #b91c1c; background: #fee2e2; padding: 0.25rem 0.65rem; border-radius: var(--radius-full); border: 1px solid #fca5a5; display: inline-flex; align-items: center; gap: 0.3rem;"><i class="fa-solid fa-circle-xmark"></i> NOT VERIFIED</span>`;
-              eligibilityHtml = `<div style="font-size: 0.78rem; color: #dc2626; font-weight: 700; margin-top: 0.25rem;"><i class="fa-solid fa-xmark"></i> Not eligible to teach</div>`;
-              const reasonText = c.verification_reason || 'Certificate could not be authenticated through official issuer registry. Tutor access denied.';
-              alertNoticeHtml = `<div style="margin-top: 0.75rem; padding: 0.65rem 0.85rem; background: rgba(220, 38, 38, 0.08); border: 1px solid rgba(220, 38, 38, 0.25); border-radius: var(--radius-md); font-size: 0.75rem; color: #b91c1c; display: flex; align-items: flex-start; gap: 0.45rem; line-height: 1.45;"><i class="fa-solid fa-circle-exclamation" style="margin-top: 2px; flex-shrink: 0;"></i> <div><strong>Verification Failed:</strong> ${reasonText}</div></div>`;
-            } else if (isManualReview) {
-              cardBgStyle = 'background: #fff7ed; border: 1.5px solid #fed7aa;';
-              statusBadgeHtml = `<span style="font-size: 0.75rem; font-weight: 800; color: #c2410c; background: #ffedd5; padding: 0.25rem 0.65rem; border-radius: var(--radius-full); border: 1px solid #fdba74; display: inline-flex; align-items: center; gap: 0.3rem;"><i class="fa-solid fa-triangle-exclamation"></i> NEEDS REVIEW</span>`;
-              eligibilityHtml = `<div style="font-size: 0.78rem; color: #ea580c; font-weight: 700; margin-top: 0.25rem;"><i class="fa-solid fa-clock"></i> Not eligible yet</div>`;
-              alertNoticeHtml = `<div style="margin-top: 0.75rem; padding: 0.65rem 0.85rem; background: rgba(234, 88, 12, 0.08); border: 1px solid rgba(234, 88, 12, 0.25); border-radius: var(--radius-md); font-size: 0.75rem; color: #c2410c; display: flex; align-items: flex-start; gap: 0.45rem; line-height: 1.45;"><i class="fa-solid fa-clock" style="margin-top: 2px; flex-shrink: 0;"></i> <div><strong>Queued for Faculty Review:</strong> Automated checks inconclusive. Forwarded for Faculty Administrator manual audit. Tutor eligibility pending.</div></div>`;
-            } else {
-              cardBgStyle = 'background: #fefce8; border: 1.5px solid #fef08a;';
-              statusBadgeHtml = `<span style="font-size: 0.75rem; font-weight: 800; color: #a16207; background: #fef3c7; padding: 0.25rem 0.65rem; border-radius: var(--radius-full); border: 1px solid #fde68a; display: inline-flex; align-items: center; gap: 0.3rem;"><i class="fa-regular fa-clock"></i> PENDING VERIFICATION</span>`;
-              eligibilityHtml = `<div style="font-size: 0.78rem; color: #d97706; font-weight: 700; margin-top: 0.25rem;"><i class="fa-regular fa-clock"></i> Verification in progress...</div>`;
-              alertNoticeHtml = `<div style="margin-top: 0.75rem; padding: 0.65rem 0.85rem; background: rgba(217, 119, 6, 0.08); border: 1px solid rgba(217, 119, 6, 0.25); border-radius: var(--radius-md); font-size: 0.75rem; color: #a16207; display: flex; align-items: flex-start; gap: 0.45rem; line-height: 1.45;"><i class="fa-regular fa-clock" style="margin-top: 2px; flex-shrink: 0;"></i> <div><strong>Verification Running:</strong> Verification starts immediately upon upload. You are not eligible to teach yet.</div></div>`;
-            }
-
-            const certTitle = c.title || c.skill_name || 'Academic Certificate';
-            const certAuthority = c.authority || c.issuer || c.platform || 'NPTEL';
-            const certId = c.credential_id || c.certificate_id || c.id || 'N/A';
-            const certScore = c.score_or_grade || c.score || '';
-            const certDuration = c.duration || '';
-            const uploadDate = c.uploaded_at ? new Date(c.uploaded_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : (c.created_at ? new Date(c.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '22 Sep 2026');
-
-            return `
-              <div style="${cardBgStyle} border-radius: var(--radius-xl); padding: 1.25rem; display: flex; flex-direction: column; justify-content: space-between; transition: all 0.2s ease; box-shadow: 0 4px 12px rgba(0,0,0,0.03);">
-                <div>
-                  <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 0.75rem; gap: 0.5rem;">
-                    <div style="display: flex; align-items: center; gap: 0.5rem;">
-                      <div style="width: 36px; height: 36px; border-radius: 50%; background: var(--bg-card); display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 6px rgba(0,0,0,0.06); flex-shrink: 0;">
-                        <i class="fa-solid fa-file-pdf" style="font-size: 1.2rem; color: #ef4444;"></i>
-                      </div>
-                      <div>
-                        <h4 style="font-size: 0.98rem; font-weight: 800; line-height: 1.25; margin: 0; color: var(--text-primary);">${certTitle}</h4>
-                        <div style="font-size: 0.78rem; font-weight: 700; color: var(--text-muted); margin-top: 0.15rem;">${certAuthority}</div>
-                      </div>
-                    </div>
-                    <button class="btn btn-secondary btn-sm" style="font-size: 0.75rem; padding: 0.35rem 0.75rem; display: inline-flex; align-items: center; gap: 0.35rem;" onclick="window.app.openCertificateAuditModal('${c.id || certId}')">
-                      <i class="fa-solid fa-magnifying-glass"></i> View
-                    </button>
-                  </div>
-                  
-                  <div style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.5rem; line-height: 1.5;">
-                    <div><strong>Certificate ID:</strong> ${certId}</div>
-                    ${certDuration ? `<div><strong>Duration:</strong> ${certDuration}</div>` : ''}
-                    ${certScore ? `<div><strong>Score:</strong> ${certScore}</div>` : ''}
-                    <div><strong>Uploaded:</strong> ${uploadDate}</div>
-                  </div>
-
-                  <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.75rem;">
-                    ${statusBadgeHtml}
-                  </div>
-                  ${eligibilityHtml}
-                </div>
-                ${alertNoticeHtml}
-              </div>
-            `;
-          }).join('');
-        }
-      }
-
-      // Render Skills Offered with 4 Exact Categories
-      const offeredList = document.getElementById('profileSkillsOfferedList');
-      if (offeredList) {
-        offeredList.innerHTML = (user.skillsOffered || []).map(s => {
-          let tierBadgeText = '🥉 1. Bronze Tutor (1.0 Cr/hr)';
-          let tierBadgeStyle = 'background: rgba(205, 127, 50, 0.15); color: #854d0e;';
-
-          if (s.tier === 'Elite Master') {
-            tierBadgeText = '🥇 4. Elite Master (2.5 Cr/hr)';
-            tierBadgeStyle = 'background: rgba(245, 158, 11, 0.15); color: #b45309;';
-          } else if (s.tier === 'Advanced') {
-            tierBadgeText = '🎖️ 3. Advanced Tutor (2.0 Cr/hr)';
-            tierBadgeStyle = 'background: rgba(14, 165, 233, 0.15); color: #0284c7;';
-          } else if (s.tier === 'Silver') {
-            tierBadgeText = '🥈 2. Silver Tutor (1.5 Cr/hr)';
-            tierBadgeStyle = 'background: rgba(148, 163, 184, 0.15); color: #475569;';
-          }
-
-          return `
-            <div style="background: var(--bg-subtle); padding: 0.85rem 1rem; border-radius: var(--radius-md); border-left: 3px solid var(--primary);">
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.25rem;">
-                <span style="font-weight: 700; font-size: 0.92rem;">
-                  ${s.is_verified ? '<i class="fa-solid fa-shield-check" style="color:var(--accent-emerald);"></i> ' : ''}${s.name}
-                </span>
-                <span style="${tierBadgeStyle} font-size: 0.72rem; font-weight: 700; padding: 0.15rem 0.5rem; border-radius: var(--radius-full);">
-                  ${tierBadgeText}
-                </span>
-              </div>
-              <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.4rem;">${s.description || s.desc || ''}</p>
-              <div style="font-size: 0.75rem; color: var(--text-muted);">Quiz Score: <strong>${s.quiz_score || 95}%</strong> • Certs Linked: <strong>${s.cert_count || 0}</strong></div>
-            </div>
-          `;
-        }).join('');
-      }
-
-      const wantedList = document.getElementById('profileSkillsWantedList');
-      if (wantedList) {
-        wantedList.innerHTML = (user.skillsWanted || []).map(s => `
-          <div style="background: var(--bg-subtle); padding: 0.85rem 1rem; border-radius: var(--radius-md); border-left: 3px solid var(--accent-amber);">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.25rem;">
-              <span style="font-weight: 700; font-size: 0.92rem;">${s.name}</span>
-              <span style="background: var(--accent-amber-light); color: var(--accent-amber); font-size: 0.72rem; font-weight: 700; padding: 0.15rem 0.5rem; border-radius: var(--radius-full);">${s.level}</span>
-            </div>
-            <p style="font-size: 0.8rem; color: var(--text-secondary);">${s.goal}</p>
-          </div>
-        `).join('');
-      }
-
-      const reviewsContainer = document.getElementById('profileReviewsContainer');
-      if (reviewsContainer) {
-        const reviews = user.reviews || [];
-        if (reviews.length === 0) {
-          reviewsContainer.innerHTML = `<div style="grid-column: 1/-1; color: var(--text-muted);">No student feedback reviews yet. Teach a session to earn ratings from students!</div>`;
-        } else {
-          reviewsContainer.innerHTML = reviews.map(r => `
-            <div style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 1.2rem;">
-              <div style="display: flex; align-items: center; gap: 0.65rem; margin-bottom: 0.65rem;">
-                ${window.getUserLogoCardHtml(r.reviewer_avatar || r.reviewer_id || r.target_user_id || 'sri', 38)}
-                <div>
-                  <div style="font-weight: 700; font-size: 0.88rem;">${r.reviewer_name || r.reviewerName}</div>
-                  <div style="font-size: 0.75rem; color: var(--text-muted);">${r.created_at || r.date} • ${r.skill}</div>
-                </div>
-                <div style="margin-left: auto; color: #f59e0b; font-weight: 700; font-size: 0.85rem;">
-                  ⭐ ${r.rating}.0
-                </div>
-              </div>
-              <p style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.4; margin-bottom: 0.65rem;">"${r.comment}"</p>
-              <div style="display: flex; gap: 0.35rem; flex-wrap: wrap;">
-                ${(r.tags || []).map(t => `<span class="tag-badge" style="font-size: 0.72rem;">${t}</span>`).join('')}
-              </div>
-            </div>
-          `).join('');
-        }
-      }
-
-      // Render AI Dynamic Assessment & Skill Qualification Records (quiz_attempts table in SQLite/Supabase)
-      const quizAttemptsSubtitle = document.getElementById('profileQuizAttemptsSubtitle');
-      if (quizAttemptsSubtitle) {
-        quizAttemptsSubtitle.textContent = `Verified Skill Evaluations & Negative Marking Test Records for ${user.name} stored in Database`;
-      }
-
-      const quizAttemptsTableBody = document.getElementById('profileQuizAttemptsTableBody');
-      if (quizAttemptsTableBody) {
-        let attempts = [];
-        try {
-          attempts = await window.store.fetchQuizAttempts(user.id);
-        } catch (e) {
-          attempts = user.quizAttempts || [];
-        }
-
-        if (!attempts || attempts.length === 0) {
-          quizAttemptsTableBody.innerHTML = `
-            <tr>
-              <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 1.5rem;">
-                <i class="fa-solid fa-graduation-cap"></i> No assessment records stored yet for ${user.name}. Take a 20-question AI quiz to qualify courses and upgrade tutor tier!
-              </td>
-            </tr>
-          `;
-        } else {
-          quizAttemptsTableBody.innerHTML = attempts.map(att => {
-            const isPass = att.passed === 1 || att.passed === true;
-            const dateStr = att.attempted_at ? new Date(att.attempted_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Recent';
-            const tierBadge = att.tier_awarded || (isPass ? 'Bronze' : 'Unverified');
-            const marksStr = `${att.marks_obtained !== undefined ? att.marks_obtained : (att.correct_count * 3 - att.wrong_count)} / ${att.max_marks || 60}`;
-
-            let tierHtml = `<span class="student-badge" style="background: rgba(205, 127, 50, 0.15); color: #854d0e;">🥉 ${tierBadge}</span>`;
-            if (tierBadge === 'Elite Master') {
-              tierHtml = `<span class="student-badge" style="background: rgba(245, 158, 11, 0.15); color: #b45309; font-weight:700;">🥇 Elite Master (2.5 Cr)</span>`;
-            } else if (tierBadge === 'Advanced') {
-              tierHtml = `<span class="student-badge" style="background: rgba(14, 165, 233, 0.15); color: #0284c7; font-weight:700;">🎖️ Advanced (2.0 Cr)</span>`;
-            } else if (tierBadge === 'Silver') {
-              tierHtml = `<span class="student-badge" style="background: rgba(148, 163, 184, 0.15); color: #475569; font-weight:700;">🥈 Silver (1.5 Cr)</span>`;
-            } else if (!isPass) {
-              tierHtml = `<span class="student-badge" style="background: rgba(239, 68, 68, 0.15); color: #dc2626; font-weight:700;">❌ Not Passed (<70%)</span>`;
-            }
-
-            return `
-              <tr>
-                <td style="font-size: 0.8rem; color: var(--text-muted);">${dateStr}</td>
-                <td><strong>${att.skill_name}</strong></td>
-                <td>${att.total_questions || 20} Qs</td>
-                <td>
-                  <span style="color: var(--accent-emerald); font-weight: 700;">+${att.correct_count * 3}</span> / 
-                  <span style="color: var(--accent-rose); font-weight: 700;">-${att.wrong_count * 1}</span> / 
-                  <span style="color: var(--text-muted); font-weight: 600;">${att.unattempted_count || 0} unattempted</span>
-                </td>
-                <td><strong>${marksStr}</strong></td>
-                <td>
-                  <span class="mark-badge ${isPass ? 'plus' : 'minus'}">${att.score_percent}%</span>
-                </td>
-                <td>${tierHtml}</td>
-              </tr>
-            `;
-          }).join('');
-        }
-      }
-
-      // Render Profile-Isolated Transaction Audit Log (Supabase PostgreSQL)
-      const profileSubtitle = document.getElementById('profileLedgerSubtitle');
-      if (profileSubtitle) {
-        profileSubtitle.textContent = `Personalized Audit Trail for ${user.name} — Immutable Ledger in Supabase PostgreSQL`;
-      }
-
-      const profileTableBody = document.getElementById('profileLedgerTableBody');
-      if (profileTableBody) {
-        let userTxs = [];
-        try {
-          userTxs = await window.store.fetchTransactionsByUser(user.id);
-        } catch (e) {
-          userTxs = (user.transactions || (window.store.transactions || []).filter(tx => tx.user_id === user.id));
-        }
-
-        if (!userTxs || userTxs.length === 0) {
-          profileTableBody.innerHTML = `
-            <tr>
-              <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 1.5rem;">
-                <i class="fa-solid fa-clock-rotate-left"></i> No transaction audit entries recorded yet for ${user.name}.
-              </td>
-            </tr>
-          `;
-        } else {
-          profileTableBody.innerHTML = userTxs.map(tx => {
-            const isPlus = tx.amount > 0;
-            const isHold = tx.status === 'In Escrow';
-            const impactClass = isHold ? 'hold' : isPlus ? 'plus' : 'minus';
-            const impactSign = isHold ? '🔒 ' : isPlus ? '+' : '';
-
-            return `
-              <tr>
-                <td>${tx.date}</td>
-                <td style="font-family: monospace; font-size: 0.8rem;">${tx.id}</td>
-                <td><strong>${tx.type}</strong></td>
-                <td>${tx.description || tx.desc}</td>
-                <td>${tx.student_name || tx.student || 'Platform'}</td>
-                <td><span class="credit-change ${impactClass}">${impactSign}${Number(tx.amount).toFixed(1)} Credits</span></td>
-                <td><span class="session-ticket-status ${tx.status === 'Completed' ? 'confirmed' : 'pending'}">${tx.status}</span></td>
-              </tr>
-            `;
-          }).join('');
-        }
-      }
-    },
-
-    // ==========================================
-    // Support Team Desk & Triage View Logic
-    // ==========================================
-    formatBytes(bytes) {
-      if (!bytes || bytes === 0) return '0 Bytes';
-      const k = 1024;
-      const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-      const i = Math.floor(Math.log(bytes) / Math.log(k));
-      return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-    },
-
-    getFileIconInfo(filename = '', fileType = '') {
-      const ext = (filename || '').split('.').pop()?.toLowerCase() || '';
-      const type = (fileType || '').toLowerCase();
-
-      if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(ext) || type.startsWith('image/')) {
-        return { icon: 'fa-solid fa-image', color: '#6366f1', isImg: true, isCode: false, isPdf: false, isText: false, label: 'Image', ext: ext.toUpperCase() || 'PNG' };
-      }
-      if (ext === 'pdf' || type.includes('pdf')) {
-        return { icon: 'fa-solid fa-file-pdf', color: '#ef4444', isImg: false, isCode: false, isPdf: true, isText: false, label: 'PDF Document', ext: 'PDF' };
-      }
-      if (['py', 'python'].includes(ext)) {
-        return { icon: 'fa-brands fa-python', color: '#3b82f6', isImg: false, isCode: true, isPdf: false, isText: false, label: 'Python Code', ext: 'PY' };
-      }
-      if (['js', 'jsx', 'javascript'].includes(ext)) {
-        return { icon: 'fa-brands fa-js', color: '#eab308', isImg: false, isCode: true, isPdf: false, isText: false, label: 'JavaScript Code', ext: 'JS' };
-      }
-      if (['ts', 'tsx', 'typescript'].includes(ext)) {
-        return { icon: 'fa-solid fa-code', color: '#3b82f6', isImg: false, isCode: true, isPdf: false, isText: false, label: 'TypeScript Code', ext: 'TS' };
-      }
-      if (['java'].includes(ext)) {
-        return { icon: 'fa-brands fa-java', color: '#f97316', isImg: false, isCode: true, isPdf: false, isText: false, label: 'Java Code', ext: 'JAVA' };
-      }
-      if (['c', 'cpp', 'h', 'hpp'].includes(ext)) {
-        return { icon: 'fa-solid fa-file-code', color: '#64748b', isImg: false, isCode: true, isPdf: false, isText: false, label: 'C/C++ Code', ext: 'CPP' };
-      }
-      if (['html', 'htm'].includes(ext)) {
-        return { icon: 'fa-brands fa-html5', color: '#f97316', isImg: false, isCode: true, isPdf: false, isText: false, label: 'HTML', ext: 'HTML' };
-      }
-      if (['css', 'scss'].includes(ext)) {
-        return { icon: 'fa-brands fa-css3-alt', color: '#3b82f6', isImg: false, isCode: true, isPdf: false, isText: false, label: 'CSS', ext: 'CSS' };
-      }
-      if (['sql'].includes(ext)) {
-        return { icon: 'fa-solid fa-database', color: '#8b5cf6', isImg: false, isCode: true, isPdf: false, isText: false, label: 'SQL Query', ext: 'SQL' };
-      }
-      if (['json'].includes(ext)) {
-        return { icon: 'fa-solid fa-brackets-curly', color: '#10b981', isImg: false, isCode: true, isPdf: false, isText: false, label: 'JSON Data', ext: 'JSON' };
-      }
-      return { icon: 'fa-solid fa-file-lines', color: '#6366f1', isImg: false, isCode: false, isPdf: false, isText: true, label: 'Text File', ext: ext.toUpperCase() || 'TXT' };
-    },
-
-    renderDoubtUploadedFiles() {
-      const container = document.getElementById('supportUploadedFilesContainer');
-      const list = document.getElementById('supportUploadedFilesList');
-      const countEl = document.getElementById('supportUploadedCount');
-
-      if (!container || !list) return;
-
-      const files = this.doubtAttachments || [];
-      if (countEl) countEl.textContent = files.length;
-
-      if (files.length === 0) {
-        container.style.display = 'none';
-        list.innerHTML = '';
-        return;
-      }
-
-      container.style.display = 'block';
-      list.innerHTML = files.map((att, idx) => {
-        const info = this.getFileIconInfo(att.name || att.file_name, att.type || att.file_type);
-        const name = this.escapeHtml(att.name || att.file_name || 'attachment');
-        const sizeStr = this.formatBytes(att.size || att.file_size);
-        const previewBtnLabel = info.isCode ? '<i class="fa-solid fa-code"></i> View Code' : '<i class="fa-regular fa-eye"></i> Preview';
-
-        return `
-          <div class="uploaded-file-card" style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 0.75rem 1rem; display: flex; align-items: center; justify-content: space-between; gap: 0.85rem; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
-            <div style="display: flex; align-items: center; gap: 0.75rem; overflow: hidden; flex: 1;">
-              ${info.isImg && (att.data || att.file_data) ? `
-                <img src="${att.data || att.file_data}" alt="${name}" style="width: 46px; height: 46px; border-radius: 6px; object-fit: cover; border: 1px solid var(--border-medium); flex-shrink: 0;">
-              ` : `
-                <div style="width: 46px; height: 46px; border-radius: 6px; background: rgba(99, 102, 241, 0.1); color: ${info.color}; display: flex; align-items: center; justify-content: center; font-size: 1.35rem; flex-shrink: 0;">
-                  <i class="${info.icon}"></i>
-                </div>
-              `}
-              <div style="overflow: hidden; text-align: left; flex: 1;">
-                <div style="display: flex; align-items: center; gap: 0.4rem;">
-                  <span style="font-weight: 700; font-size: 0.85rem; color: var(--text-primary); text-overflow: ellipsis; white-space: nowrap; overflow: hidden;" title="${name}">${name}</span>
-                  <i class="fa-solid fa-circle-check" style="color: #10b981; font-size: 0.85rem;" title="File verified & ready"></i>
-                </div>
-                <div style="font-size: 0.74rem; color: var(--text-muted); margin-top: 0.15rem;">
-                  <span style="font-weight: 700; color: var(--text-secondary);">${info.ext}</span> • ${sizeStr}
-                </div>
-              </div>
-            </div>
-            <div style="display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0;">
-              <button type="button" class="btn btn-secondary btn-sm file-card-action-btn" onclick="window.app.previewLocalDoubtAttachment(${idx})" style="font-size: 0.75rem; padding: 0.3rem 0.6rem;">
-                ${previewBtnLabel}
-              </button>
-              <button type="button" class="btn btn-secondary btn-sm file-card-action-btn" onclick="window.app.downloadLocalAttachment('doubt', ${idx})" style="font-size: 0.75rem; padding: 0.3rem 0.6rem;" title="Download File">
-                <i class="fa-solid fa-download"></i> Download
-              </button>
-              <button type="button" class="btn btn-secondary btn-sm file-card-action-btn" onclick="window.app.removeDoubtAttachment(${idx})" style="font-size: 0.75rem; padding: 0.3rem 0.55rem; color: var(--accent-rose);" title="Remove File">
-                <i class="fa-solid fa-trash-can"></i>
-              </button>
-            </div>
-          </div>
-        `;
-      }).join('');
-    },
-
-    renderAnswerUploadedFiles() {
-      const container = document.getElementById('resolveAnswerUploadedContainer');
-      const list = document.getElementById('resolveAnswerUploadedList');
-      const countEl = document.getElementById('resolveAnswerUploadedCount');
-
-      if (!container || !list) return;
-
-      const files = this.answerAttachments || [];
-      if (countEl) countEl.textContent = files.length;
-
-      if (files.length === 0) {
-        container.style.display = 'none';
-        list.innerHTML = '';
-        return;
-      }
-
-      container.style.display = 'block';
-      list.innerHTML = files.map((att, idx) => {
-        const info = this.getFileIconInfo(att.name || att.file_name, att.type || att.file_type);
-        const name = this.escapeHtml(att.name || att.file_name || 'solution_attachment');
-        const sizeStr = this.formatBytes(att.size || att.file_size);
-        const previewBtnLabel = info.isCode ? '<i class="fa-solid fa-code"></i> View Code' : '<i class="fa-regular fa-eye"></i> Preview';
-
-        return `
-          <div class="uploaded-file-card" style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 0.75rem 0.9rem; display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
-            <div style="display: flex; align-items: center; gap: 0.65rem; overflow: hidden; flex: 1;">
-              ${info.isImg && (att.data || att.file_data) ? `
-                <img src="${att.data || att.file_data}" alt="${name}" style="width: 42px; height: 42px; border-radius: 6px; object-fit: cover; border: 1px solid var(--border-medium); flex-shrink: 0;">
-              ` : `
-                <div style="width: 42px; height: 42px; border-radius: 6px; background: rgba(16, 185, 129, 0.1); color: ${info.color}; display: flex; align-items: center; justify-content: center; font-size: 1.25rem; flex-shrink: 0;">
-                  <i class="${info.icon}"></i>
-                </div>
-              `}
-              <div style="overflow: hidden; text-align: left; flex: 1;">
-                <div style="display: flex; align-items: center; gap: 0.35rem;">
-                  <span style="font-weight: 700; font-size: 0.83rem; color: var(--text-primary); text-overflow: ellipsis; white-space: nowrap; overflow: hidden;" title="${name}">${name}</span>
-                  <i class="fa-solid fa-circle-check" style="color: #10b981; font-size: 0.8rem;"></i>
-                </div>
-                <div style="font-size: 0.72rem; color: var(--text-muted); margin-top: 0.15rem;">
-                  <span style="font-weight: 700; color: var(--text-secondary);">${info.ext}</span> • ${sizeStr}
-                </div>
-              </div>
-            </div>
-            <div style="display: flex; align-items: center; gap: 0.35rem; flex-shrink: 0;">
-              <button type="button" class="btn btn-secondary btn-sm file-card-action-btn" onclick="window.app.previewLocalAnswerAttachment(${idx})" style="font-size: 0.72rem; padding: 0.25rem 0.55rem;">
-                ${previewBtnLabel}
-              </button>
-              <button type="button" class="btn btn-secondary btn-sm file-card-action-btn" onclick="window.app.downloadLocalAttachment('answer', ${idx})" style="font-size: 0.72rem; padding: 0.25rem 0.55rem;" title="Download">
-                <i class="fa-solid fa-download"></i>
-              </button>
-              <button type="button" class="btn btn-secondary btn-sm file-card-action-btn" onclick="window.app.removeAnswerAttachment(${idx})" style="font-size: 0.72rem; padding: 0.25rem 0.5rem; color: var(--accent-rose);" title="Remove">
-                <i class="fa-solid fa-trash-can"></i>
-              </button>
-            </div>
-          </div>
-        `;
-      }).join('');
-    },
-
-    removeDoubtAttachment(index) {
-      if (this.doubtAttachments && this.doubtAttachments[index]) {
-        this.doubtAttachments.splice(index, 1);
-        this.renderDoubtUploadedFiles();
-      }
-    },
-
-    removeAnswerAttachment(index) {
-      if (this.answerAttachments && this.answerAttachments[index]) {
-        this.answerAttachments.splice(index, 1);
-        this.renderAnswerUploadedFiles();
-      }
-    },
-
-    previewLocalDoubtAttachment(index) {
-      const att = this.doubtAttachments?.[index];
-      if (att) this.openFilePreview(att);
-    },
-
-    previewLocalAnswerAttachment(index) {
-      const att = this.answerAttachments?.[index];
-      if (att) this.openFilePreview(att);
-    },
-
-    downloadLocalAttachment(type, index) {
-      const att = (type === 'doubt' ? this.doubtAttachments : this.answerAttachments)?.[index];
-      if (!att) return;
-      const dataUri = att.data || att.file_data;
-      const filename = att.name || att.file_name || 'download';
-      const a = document.createElement('a');
-      a.href = dataUri;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-    },
-
-    /**
-     * Universal File Preview Modal (Image Lightbox, PDF Viewer, Monospace Code Viewer with Copy & Download)
-     */
-    openFilePreview(att) {
-      if (!att) return;
-
-      const fileName = att.file_name || att.name || 'attachment';
-      const fileData = att.file_data || att.data || '';
-      const fileType = att.file_type || att.type || '';
-      const fileSize = att.file_size || att.size || (fileData ? fileData.length : 0);
-
-      const info = this.getFileIconInfo(fileName, fileType);
-
-      const iconEl = document.getElementById('previewModalFileIcon');
-      if (iconEl) {
-        iconEl.className = info.icon;
-        iconEl.style.color = info.color;
-      }
-
-      const nameEl = document.getElementById('previewModalFileName');
-      if (nameEl) nameEl.textContent = fileName;
-
-      const metaEl = document.getElementById('previewModalFileMeta');
-      if (metaEl) metaEl.textContent = `${info.label} (${info.ext}) • ${this.formatBytes(fileSize)}`;
-
-      const copyBtn = document.getElementById('previewModalCopyCodeBtn');
-      const downloadBtn = document.getElementById('previewModalDownloadBtn');
-      const bodyEl = document.getElementById('previewModalBody');
-
-      this.currentPreviewCode = null;
-
-      if (downloadBtn) {
-        downloadBtn.onclick = () => {
-          if (att.id && !att.id.startsWith('local_')) {
-            window.store.downloadAttachment(att.id, fileName).catch(() => {
-              const a = document.createElement('a');
-              a.href = fileData;
-              a.download = fileName;
-              document.body.appendChild(a);
-              a.click();
-              a.remove();
-            });
-          } else {
-            const a = document.createElement('a');
-            a.href = fileData;
-            a.download = fileName;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-          }
-        };
-      }
-
-      if (info.isImg) {
-        if (copyBtn) copyBtn.style.display = 'none';
-        if (bodyEl) {
-          bodyEl.innerHTML = `
-            <div style="text-align: center; max-width: 100%; max-height: 100%;">
-              <img src="${fileData}" alt="${this.escapeHtml(fileName)}" style="max-width: 100%; max-height: 60vh; border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,0.15); object-fit: contain;">
-            </div>
-          `;
-        }
-      } else if (info.isPdf) {
-        if (copyBtn) copyBtn.style.display = 'none';
-        if (bodyEl) {
-          bodyEl.innerHTML = `
-            <div style="width: 100%; height: 500px; display: flex; flex-direction: column;">
-              <object data="${fileData}" type="application/pdf" width="100%" height="100%" style="border-radius: 8px; border: 1px solid var(--border-medium);">
-                <div style="text-align: center; padding: 2rem;">
-                  <p>PDF preview is not supported directly in this inline browser frame.</p>
-                  <a href="${fileData}" download="${this.escapeHtml(fileName)}" class="btn btn-primary btn-sm">
-                    <i class="fa-solid fa-download"></i> Download ${this.escapeHtml(fileName)}
-                  </a>
-                </div>
-              </object>
-            </div>
-          `;
-        }
-      } else {
-        // Code / Text
-        let textContent = fileData;
-        if (fileData.startsWith('data:')) {
-          try {
-            const base64Str = fileData.split(',')[1];
-            textContent = decodeURIComponent(escape(atob(base64Str)));
-          } catch (e) {
-            try {
-              textContent = atob(fileData.split(',')[1]);
-            } catch (err) {
-              textContent = fileData;
-            }
-          }
-        }
-
-        this.currentPreviewCode = textContent;
-        if (copyBtn) copyBtn.style.display = 'inline-flex';
-
-        const lines = textContent.split('\n');
-        const formattedCode = lines.map((line, lIdx) => {
-          return `<div style="display: flex; gap: 1rem;"><span style="color: #64748b; user-select: none; width: 30px; text-align: right; flex-shrink: 0;">${lIdx + 1}</span><span style="flex: 1; white-space: pre-wrap; word-break: break-all;">${this.escapeHtml(line) || ' '}</span></div>`;
-        }).join('');
-
-        if (bodyEl) {
-          bodyEl.innerHTML = `
-            <div style="width: 100%; text-align: left; background: #0f172a; color: #f8fafc; border-radius: 8px; padding: 1rem; font-family: 'Fira Code', monospace, Consolas; font-size: 0.85rem; line-height: 1.5; overflow-x: auto; max-height: 60vh;">
-              ${formattedCode}
-            </div>
-          `;
-        }
-      }
-
-      this.openModal('filePreviewModal');
-    },
-
-    /**
-     * View Full Doubt Modal
-     */
-    openViewFullDoubtModal(doubtId) {
-      const doubt = (this.supportTickets || []).find(d => d.id === doubtId);
-      if (!doubt) return;
-
-      const titleEl = document.getElementById('fullDoubtModalTitle');
-      if (titleEl) titleEl.textContent = doubt.title;
-
-      const authorName = doubt.raised_by_name || doubt.student_name || 'Student';
-      const categoryLabel = doubt.category || doubt.course || doubt.skill_name || 'Technical Doubt';
-      const metaEl = document.getElementById('fullDoubtModalMeta');
-      if (metaEl) {
-        metaEl.textContent = `Asked by ${authorName} • ${categoryLabel} • Status: ${doubt.status}`;
-      }
-
-      const bodyEl = document.getElementById('fullDoubtModalBody');
-      if (!bodyEl) return;
-
-      const attachments = doubt.attachments || [];
-      const answers = doubt.answers || [];
-      const primaryAnswer = answers[0] || null;
-      const answerAttachments = doubt.answer_attachments || primaryAnswer?.attachments || [];
-
-      let attsHtml = '';
-      if (attachments.length > 0) {
-        attsHtml = `
-          <div style="margin-top: 0.85rem;">
-            <div style="font-weight: 700; font-size: 0.85rem; color: var(--text-primary); margin-bottom: 0.4rem;">
-              📎 Student Attached Files (${attachments.length})
-            </div>
-            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0.5rem;">
-              ${attachments.map((att, aIdx) => {
-          const info = this.getFileIconInfo(att.file_name || att.name, att.file_type || att.type);
-          const safeName = this.escapeHtml(att.file_name || att.name || 'attachment');
-          const sizeStr = this.formatBytes(att.file_size || att.size);
-          return `
-                  <div style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 0.65rem 0.85rem; display: flex; align-items: center; justify-content: space-between; gap: 0.65rem;">
-                    <div style="display: flex; align-items: center; gap: 0.6rem; overflow: hidden; flex: 1;">
-                      <i class="${info.icon}" style="color: ${info.color}; font-size: 1.25rem; flex-shrink: 0;"></i>
-                      <div style="overflow: hidden; text-align: left;">
-                        <div style="font-weight: 700; font-size: 0.82rem; color: var(--text-primary); text-overflow: ellipsis; white-space: nowrap; overflow: hidden;">${safeName}</div>
-                        <div style="font-size: 0.7rem; color: var(--text-muted);">${info.ext} • ${sizeStr}</div>
-                      </div>
-                    </div>
-                    <div style="display: flex; gap: 0.35rem; flex-shrink: 0;">
-                      <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.previewDoubtAttachmentById('${doubt.id}', ${aIdx})" style="font-size: 0.72rem; padding: 0.25rem 0.5rem;">
-                        ${info.isCode ? 'View Code' : 'Preview'}
-                      </button>
-                      <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.downloadDoubtAttachmentById('${doubt.id}', ${aIdx})" style="font-size: 0.72rem; padding: 0.25rem 0.5rem;">
-                        <i class="fa-solid fa-download"></i>
-                      </button>
-                    </div>
-                  </div>
-                `;
-        }).join('')}
-            </div>
-          </div>
-        `;
-      }
-
-      let answerHtml = '';
-      if (doubt.status === 'RESOLVED' && (primaryAnswer || doubt.mentor_solution)) {
-        const solverName = primaryAnswer?.answered_by_name || doubt.accepted_by_name || doubt.support_mentor_name || 'Verified Mentor';
-        const solutionText = primaryAnswer?.answer_text || doubt.mentor_solution || '';
-        const classification = primaryAnswer?.classification || doubt.mentor_classification || 'Verified Solution';
-
-        let ansAttsHtml = '';
-        if (answerAttachments.length > 0) {
-          ansAttsHtml = `
-            <div style="margin-top: 0.75rem;">
-              <div style="font-weight: 700; font-size: 0.82rem; color: #10b981; margin-bottom: 0.35rem;">
-                📎 Solution Attached Files (${answerAttachments.length})
-              </div>
-              <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0.5rem;">
-                ${answerAttachments.map((att, aIdx) => {
-            const info = this.getFileIconInfo(att.file_name || att.name, att.file_type || att.type);
-            const safeName = this.escapeHtml(att.file_name || att.name || 'solution_file');
-            const sizeStr = this.formatBytes(att.file_size || att.size);
-            return `
-                    <div style="background: rgba(16, 185, 129, 0.05); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: var(--radius-md); padding: 0.65rem 0.85rem; display: flex; align-items: center; justify-content: space-between; gap: 0.65rem;">
-                      <div style="display: flex; align-items: center; gap: 0.6rem; overflow: hidden; flex: 1;">
-                        <i class="${info.icon}" style="color: ${info.color}; font-size: 1.25rem; flex-shrink: 0;"></i>
-                        <div style="overflow: hidden; text-align: left;">
-                          <div style="font-weight: 700; font-size: 0.82rem; color: var(--text-primary); text-overflow: ellipsis; white-space: nowrap; overflow: hidden;">${safeName}</div>
-                          <div style="font-size: 0.7rem; color: var(--text-muted);">${info.ext} • ${sizeStr}</div>
-                        </div>
-                      </div>
-                      <div style="display: flex; gap: 0.35rem; flex-shrink: 0;">
-                        <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.previewAnswerAttachmentById('${doubt.id}', ${aIdx})" style="font-size: 0.72rem; padding: 0.25rem 0.5rem;">
-                          ${info.isCode ? 'View Code' : 'Preview'}
-                        </button>
-                        <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.downloadAnswerAttachmentById('${doubt.id}', ${aIdx})" style="font-size: 0.72rem; padding: 0.25rem 0.5rem;">
-                          <i class="fa-solid fa-download"></i>
-                        </button>
-                      </div>
-                    </div>
-                  `;
-          }).join('')}
-              </div>
-            </div>
-          `;
-        }
-
-        answerHtml = `
-          <div style="background: rgba(16, 185, 129, 0.06); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: var(--radius-md); padding: 1rem; margin-top: 1rem;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-              <span style="font-weight: 800; color: #10b981; font-size: 0.95rem;">
-                <i class="fa-solid fa-graduation-cap"></i> Solution by ${this.escapeHtml(solverName)}
-              </span>
-              <span style="background: rgba(16, 185, 129, 0.2); color: #059669; font-weight: 800; font-size: 0.74rem; padding: 0.2rem 0.55rem; border-radius: var(--radius-sm);">
-                ${this.escapeHtml(classification)}
-              </span>
-            </div>
-            <div style="font-size: 0.85rem; color: var(--text-primary); line-height: 1.5; white-space: pre-wrap;">
-              ${this.escapeHtml(solutionText)}
-            </div>
-            ${ansAttsHtml}
-
-            <!-- Modal Rating Box -->
-            <div style="margin-top: 0.75rem; padding-top: 0.65rem; border-top: 1px dashed rgba(16, 185, 129, 0.3); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
-              <div>
-                <div style="font-size: 0.84rem; font-weight: 800; color: var(--text-primary);">
-                  ${doubt.rating > 0 ? `✓ Student Rating: ${doubt.rating} / 5 Stars (Locked)` : 'Rate Mentor\'s Solution:'}
-                </div>
-                <div style="font-size: 0.72rem; color: var(--text-muted); margin-top: 0.15rem;">
-                  ${doubt.rating > 0 ? (doubt.rating >= 3 ? `🎉 +${doubt.reward_credits || 0.5} Cr bounty credited to mentor!` : `⭐ Rating recorded (${doubt.rating} Stars).`) : '3★ or higher releases mentor credit reward.'}
-                </div>
-              </div>
-              ${doubt.rating > 0 ? `
-                <div style="display: flex; gap: 0.25rem; align-items: center;" title="Rating Locked (${doubt.rating} Stars)">
-                  ${[1, 2, 3, 4, 5].map(star => `
-                    <i class="fa-${doubt.rating >= star ? 'solid' : 'regular'} fa-star" style="color: #f59e0b; font-size: 1.25rem;"></i>
-                  `).join('')}
-                </div>
-              ` : `
-                <div class="support-star-rating">
-                  ${[1, 2, 3, 4, 5].map(star => `
-                    <button type="button" class="star-btn" onclick="window.app.rateSupportTicket('${doubt.id}', ${star}); window.app.closeModal('viewFullDoubtModal');" title="Rate ${star} Stars">
-                      <i class="fa-${(doubt.rating || 0) >= star ? 'solid' : 'regular'} fa-star" style="color: #f59e0b; font-size: 1.25rem;"></i>
-                    </button>
-                  `).join('')}
-                </div>
-              `}
-            </div>
-          </div>
-        `;
-      }
-
-      bodyEl.innerHTML = `
-        <div style="display: flex; flex-direction: column; gap: 0.75rem;">
-          <div style="font-size: 0.9rem; color: var(--text-primary); line-height: 1.5; white-space: pre-wrap;">
-            ${this.escapeHtml(doubt.description)}
-          </div>
-
-          ${doubt.code_snippet ? `
-            <div style="margin-top: 0.5rem;">
-              <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.25rem;">Original Code Snippet:</div>
-              <pre class="support-code-box" style="margin: 0; max-height: 220px; overflow-y: auto;"><code>${this.escapeHtml(doubt.code_snippet)}</code></pre>
-            </div>
-          ` : ''}
-
-          ${attsHtml}
-          ${answerHtml}
-        </div>
-      `;
-
-      this.openModal('viewFullDoubtModal');
-    },
-
-    previewDoubtAttachmentById(doubtId, attIndex) {
-      const doubt = (this.supportTickets || []).find(d => d.id === doubtId);
-      const att = doubt?.attachments?.[attIndex];
-      if (att) this.openFilePreview(att);
-    },
-
-    downloadDoubtAttachmentById(doubtId, attIndex) {
-      const doubt = (this.supportTickets || []).find(d => d.id === doubtId);
-      const att = doubt?.attachments?.[attIndex];
-      if (!att) return;
-      if (att.id && !att.id.startsWith('local_')) {
-        window.store.downloadAttachment(att.id, att.file_name).catch(() => {
-          const a = document.createElement('a');
-          a.href = att.file_data;
-          a.download = att.file_name;
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-        });
-      } else {
-        const a = document.createElement('a');
-        a.href = att.file_data;
-        a.download = att.file_name;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-      }
-    },
-
-    previewAnswerAttachmentById(doubtId, attIndex) {
-      const doubt = (this.supportTickets || []).find(d => d.id === doubtId);
-      const att = doubt?.answer_attachments?.[attIndex] || doubt?.answers?.[0]?.attachments?.[attIndex];
-      if (att) this.openFilePreview(att);
-    },
-
-    downloadAnswerAttachmentById(doubtId, attIndex) {
-      const doubt = (this.supportTickets || []).find(d => d.id === doubtId);
-      const att = doubt?.answer_attachments?.[attIndex] || doubt?.answers?.[0]?.attachments?.[attIndex];
-      if (!att) return;
-      if (att.id && !att.id.startsWith('local_')) {
-        window.store.downloadAttachment(att.id, att.file_name).catch(() => {
-          const a = document.createElement('a');
-          a.href = att.file_data;
-          a.download = att.file_name;
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-        });
-      } else {
-        const a = document.createElement('a');
-        a.href = att.file_data;
-        a.download = att.file_name;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-      }
-    },
-
-    async refreshDynamicSupportSubjects() {
-      try {
-        const subjects = await window.store.fetchSupportSubjects();
-        this.knownSupportSubjects = subjects || [];
-
-        // 1. Populate Submit Doubt modal subject dropdown
-        const skillSelect = document.getElementById('supportSkillSelect');
-        if (skillSelect) {
-          const currentVal = skillSelect.value;
-          skillSelect.innerHTML = this.knownSupportSubjects.map(s =>
-            `<option value="${this.escapeHtml(s)}">${this.escapeHtml(s)}</option>`
-          ).join('') + `<option value="__custom__">➕ Other / Custom Subject...</option>`;
-          if (currentVal && currentVal !== '__custom__' && this.knownSupportSubjects.includes(currentVal)) {
-            skillSelect.value = currentVal;
-          }
-        }
-
-        // 2. Populate Support Hub Subject Quick Filter
-        const filterSelect = document.getElementById('supportSubjectFilterSelect');
-        if (filterSelect) {
-          const curFilter = filterSelect.value || 'ALL';
-          filterSelect.innerHTML = `<option value="ALL">All Subjects (${this.knownSupportSubjects.length})</option>` +
-            this.knownSupportSubjects.map(s =>
-              `<option value="${this.escapeHtml(s)}">${this.escapeHtml(s)}</option>`
-            ).join('');
-          if (curFilter && (curFilter === 'ALL' || this.knownSupportSubjects.includes(curFilter))) {
-            filterSelect.value = curFilter;
-          }
-        }
-
-        // 3. Populate Search Autocomplete Suggestions Datalist
-        const datalist = document.getElementById('supportSubjectDatalist');
-        if (datalist) {
-          datalist.innerHTML = this.knownSupportSubjects.map(s =>
-            `<option value="${this.escapeHtml(s)}"></option>`
-          ).join('');
-        }
-      } catch (e) {
-        console.warn('Could not refresh dynamic subjects:', e);
-      }
-    },
-
-    async openCreateSupportModal() {
-      document.getElementById('createSupportTicketForm')?.reset();
-      const customGroup = document.getElementById('supportCustomSubjectGroup');
-      if (customGroup) customGroup.style.display = 'none';
-      const customInput = document.getElementById('supportCustomSkillInput');
-      if (customInput) customInput.value = '';
-
-      this.doubtAttachments = [];
-      this.renderDoubtUploadedFiles();
-      const descCount = document.getElementById('doubtDescCharCount');
-      if (descCount) descCount.textContent = '0';
-
-      await this.refreshDynamicSupportSubjects();
-      this.openModal('createSupportTicketModal');
-      await this.checkSupportEligibilityLive();
-    },
-
-    async checkSupportEligibilityLive() {
-      const skillSelect = document.getElementById('supportSkillSelect');
-      const statusBox = document.getElementById('supportEligibilityStatusBox');
-      if (!skillSelect || !statusBox) return;
-
-      let skillName = skillSelect.value;
-      if (skillName === '__custom__') {
-        skillName = document.getElementById('supportCustomSkillInput')?.value || 'Custom Course';
-      }
-
-      statusBox.className = 'eligibility-status-box';
-      statusBox.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Verifying student course attendance & credentials...';
-
-      try {
-        const data = await window.store.checkSupportEligibility(skillName);
-        if (data.eligible) {
-          statusBox.className = 'eligibility-status-box verified';
-          statusBox.innerHTML = `<i class="fa-solid fa-circle-check"></i> <strong>✓ Eligible for 0 Cr Support:</strong> ${data.proof}`;
-        } else {
-          statusBox.className = 'eligibility-status-box warning';
-          statusBox.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> <strong>Prior Knowledge Notice:</strong> ${data.proof || 'No session attendance recorded in this skill yet. You can still submit if you studied independently.'}`;
-        }
-      } catch (err) {
-        statusBox.className = 'eligibility-status-box verified';
-        statusBox.innerHTML = `<i class="fa-solid fa-circle-check"></i> <strong>✓ Eligible:</strong> Academic support pool active.`;
-      }
-    },
-
-    openResolveSupportModal(ticketId) {
-      const ticket = (this.supportTickets || []).find(t => t.id === ticketId);
-      if (!ticket) return;
-
-      const hiddenId = document.getElementById('resolveTicketId');
-      if (hiddenId) hiddenId.value = ticket.id;
-
-      const summary = document.getElementById('resolveTicketSummary');
-      if (summary) {
-        summary.innerHTML = `
-          <div style="display: flex; align-items: center; gap: 0.75rem; overflow: hidden; flex: 1;">
-            <div style="width: 38px; height: 38px; border-radius: 8px; background: rgba(245, 158, 11, 0.15); color: #d97706; display: flex; align-items: center; justify-content: center; font-size: 1.15rem; flex-shrink: 0;">
-              <i class="fa-regular fa-comment-dots"></i>
-            </div>
-            <div style="overflow: hidden; text-align: left; flex: 1;">
-              <div style="font-weight: 800; font-size: 0.9rem; color: var(--text-primary); text-overflow: ellipsis; white-space: nowrap; overflow: hidden;" title="${this.escapeHtml(ticket.title)}">${this.escapeHtml(ticket.title)}</div>
-              <div style="font-size: 0.74rem; color: var(--text-muted); margin-top: 0.15rem;">
-                ${this.escapeHtml(ticket.course || ticket.skill_name || 'Programming')} • ${this.escapeHtml(ticket.category || ticket.issue_type || 'Code Bug')}
-              </div>
-            </div>
-          </div>
-          <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.openViewFullDoubtModal('${ticket.id}')" style="font-size: 0.75rem; padding: 0.3rem 0.65rem; white-space: nowrap;">
-            <i class="fa-solid fa-expand"></i> View Full Doubt
-          </button>
-        `;
-      }
-
-      // Pre-select recommended quiz to match skill
-      const quizSelect = document.getElementById('resolveRecommendedQuizSelect');
-      if (quizSelect) {
-        for (let opt of quizSelect.options) {
-          if (opt.value.toLowerCase().includes((ticket.skill_name || '').toLowerCase()) || (ticket.skill_name || '').toLowerCase().includes(opt.value.toLowerCase())) {
-            quizSelect.value = opt.value;
-            break;
-          }
-        }
-      }
-
-      const solutionInput = document.getElementById('resolveSolutionInput');
-      if (solutionInput) solutionInput.value = '';
-      const answerCount = document.getElementById('answerCharCount');
-      if (answerCount) answerCount.textContent = '0';
-
-      this.answerAttachments = [];
-      this.renderAnswerUploadedFiles();
-
-      this.openModal('resolveSupportModal');
-    },
-
-    async claimSupportTicket(ticketId) {
-      try {
-        await window.store.claimSupportTicket(ticketId);
-        this.showToast('Ticket claimed! You can now submit your solution and earn skill credits.', 'lock');
-        await this.renderSupportDesk();
-      } catch (err) {
-        alert('Could not claim ticket: ' + err.message);
-      }
-    },
-
-    async rateSupportTicket(ticketId, rating) {
-      if (!this.ratingInProgress) this.ratingInProgress = {};
-      if (this.ratingInProgress[ticketId]) return;
-      this.ratingInProgress[ticketId] = true;
-
-      try {
-        const res = await window.store.rateSupportTicket(ticketId, rating, '');
-        if (res.rewardReleased) {
-          this.showToast(`🎉 Rated ${rating} Stars! +${res.rewardAmount || 0.5} Credits reward released to mentor!`, 'coins');
-        } else if (rating >= 3) {
-          this.showToast(`⭐ Rated ${rating} Stars! Rating saved successfully.`, 'check');
-        } else {
-          this.showToast(`⭐ Rated ${rating} Stars. (Mentor reward is released for ratings of 3★ or above).`, 'user');
-        }
-        await window.store.fetchMe();
-        await window.store.fetchWallet();
-        this.renderNavbar();
-        await this.renderSupportDesk(true);
-        if (this.currentTab === 'view-wallet') this.renderWallet();
-      } catch (err) {
-        alert('Could not submit rating: ' + err.message);
-      } finally {
-        this.ratingInProgress[ticketId] = false;
-      }
-    },
-
-    async renderSupportDesk(silent = false) {
-      try {
-        const [doubts, stats] = await Promise.all([
-          window.store.fetchSupportDoubts(),
-          window.store.fetchSupportStats(),
-          this.refreshDynamicSupportSubjects()
-        ]);
-        this.supportTickets = doubts || [];
-
-        // Update Dynamic KPI metrics from database
-        const openEl = document.getElementById('supportOpenCount');
-        if (openEl) openEl.textContent = `${stats.openDoubts || 0} Doubts`;
-
-        const resolvedEl = document.getElementById('supportResolvedCount');
-        if (resolvedEl) resolvedEl.textContent = `${stats.resolvedDoubts || 0} Solved`;
-
-        const rewardsEl = document.getElementById('supportTotalRewards');
-        if (rewardsEl) rewardsEl.textContent = `${(stats.totalRewardsCredits || 0).toFixed(1)} Cr`;
-
-        // Update sidebar badge
-        const badge = document.getElementById('sidebarSupportBadge');
-        if (badge) {
-          const openCount = stats.openDoubts || this.supportTickets.filter(t => t.status === 'OPEN').length;
-          badge.textContent = `${openCount} Open`;
-          badge.style.display = openCount > 0 ? 'inline-flex' : 'none';
-        }
-
-        this.renderSupportDeskCards();
-        if (!silent) this.startSupportDeskPolling();
-      } catch (err) {
-        console.error('Error rendering support desk:', err);
-      }
-    },
-
-    startSupportDeskPolling() {
-      if (this.supportDeskPollInterval) clearInterval(this.supportDeskPollInterval);
-      this.supportDeskPollInterval = setInterval(async () => {
-        if (this.currentTab === 'view-support' || this.currentTab === 'view-wallet') {
-          await this.renderSupportDesk(true);
-          await window.store.fetchMe();
-          await window.store.fetchWallet();
-          this.renderNavbar();
-          if (this.currentTab === 'view-wallet') this.renderWallet();
-        }
-      }, 5000);
-    },
-
-    async acceptSupportDoubt(doubtId, btnElement) {
-      if (btnElement) {
-        btnElement.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Accepting...';
-        btnElement.disabled = true;
-      }
-
-      try {
-        const res = await window.store.acceptSupportDoubt(doubtId);
-        this.showToast('🎉 You accepted this doubt! Write your solution to earn bounty credits.', 'check');
-        await this.renderSupportDesk();
-        this.openResolveSupportModal(doubtId);
-      } catch (err) {
-        if (btnElement) {
-          btnElement.innerHTML = '<i class="fa-solid fa-hand-holding-hand"></i> Accept Doubt';
-          btnElement.disabled = false;
-        }
-
-        if (err.isConflict || err.status === 409 || (err.message && err.message.includes('already been accepted'))) {
-          this.showToast('⚠️ This doubt has already been accepted by another user.', 'lock');
-        } else {
-          alert(err.message || 'Could not accept doubt.');
-        }
-        await this.renderSupportDesk();
-      }
-    },
-
-    renderSupportDeskCards() {
-      const container = document.getElementById('supportTicketsCardGrid');
-      if (!container) return;
-
-      const currentPersona = window.store.getCurrentPersona();
-      const currentUserId = currentPersona?.id || window.store.currentUser?.id;
-      let filtered = (this.supportTickets || []).slice();
-
-      // 1. Filter by Status / Category / Mine
-      if (this.supportFilter === 'CODE_BUG') {
-        filtered = filtered.filter(t => {
-          const cat = ((t.category || '') + ' ' + (t.issue_type || '')).toLowerCase();
-          return cat.includes('bug') || cat.includes('error') || cat.includes('code') || cat.includes('syntax') || cat.includes('exception');
-        });
-      } else if (this.supportFilter === 'CONCEPT_DOUBT') {
-        filtered = filtered.filter(t => {
-          const cat = ((t.category || '') + ' ' + (t.issue_type || '')).toLowerCase();
-          return cat.includes('concept') || cat.includes('explain') || cat.includes('theory') || cat.includes('logic') || cat.includes('why') || cat.includes('how');
-        });
-      } else if (this.supportFilter === 'ARCH_DESIGN') {
-        filtered = filtered.filter(t => {
-          const cat = ((t.category || '') + ' ' + (t.issue_type || '')).toLowerCase();
-          return cat.includes('arch') || cat.includes('design') || cat.includes('db') || cat.includes('database') || cat.includes('system') || cat.includes('indexing');
-        });
-      } else if (this.supportFilter === 'OPEN') {
-        filtered = filtered.filter(t => t.status === 'OPEN' && (!t.accepted_by_user_id || t.accepted_by_user_id === ''));
-      } else if (this.supportFilter === 'ACCEPTED' || this.supportFilter === 'IN_PROGRESS') {
-        filtered = filtered.filter(t => t.status === 'ACCEPTED' || t.status === 'CLAIMED');
-      } else if (this.supportFilter === 'RESOLVED') {
-        filtered = filtered.filter(t => t.status === 'RESOLVED' || t.status === 'CLOSED');
-      } else if (this.supportFilter === 'MINE') {
-        filtered = filtered.filter(t =>
-          (t.raised_by_user_id && t.raised_by_user_id === currentUserId) ||
-          (t.student_id && t.student_id === currentUserId) ||
-          (t.accepted_by_user_id && t.accepted_by_user_id === currentUserId) ||
-          (t.support_mentor_id && t.support_mentor_id === currentUserId) ||
-          (t.answers && t.answers.some(a => a.answered_by_user_id === currentUserId))
-        );
-      }
-
-      // 2. Filter by Dynamic Subject Filter Dropdown
-      if (this.supportSubjectFilter && this.supportSubjectFilter !== 'ALL') {
-        const targetSub = this.supportSubjectFilter.toLowerCase().trim();
-        filtered = filtered.filter(t => {
-          const combined = ((t.course || '') + ' ' + (t.skill_name || '') + ' ' + (t.category || '')).toLowerCase();
-          return combined.includes(targetSub);
-        });
-      }
-
-      // 3. Filter by Search Query
-      if (this.supportSearchQuery) {
-        const q = this.supportSearchQuery.toLowerCase().trim();
-        filtered = filtered.filter(t =>
-          (t.title && t.title.toLowerCase().includes(q)) ||
-          (t.description && t.description.toLowerCase().includes(q)) ||
-          (t.category && t.category.toLowerCase().includes(q)) ||
-          (t.course && t.course.toLowerCase().includes(q)) ||
-          (t.skill_name && t.skill_name.toLowerCase().includes(q)) ||
-          (t.raised_by_name && t.raised_by_name.toLowerCase().includes(q)) ||
-          (t.student_name && t.student_name.toLowerCase().includes(q)) ||
-          (t.accepted_by_name && t.accepted_by_name.toLowerCase().includes(q))
-        );
-      }
-
-      if (filtered.length === 0) {
-        if (this.supportFilter === 'MINE') {
-          container.innerHTML = `
-            <div style="grid-column: 1 / -1; text-align: center; padding: 3rem 1.5rem; background: var(--bg-card); border-radius: var(--radius-xl); border: 1px dashed var(--border-medium);">
-              <i class="fa-solid fa-user-check" style="font-size: 2.5rem; color: var(--text-muted); margin-bottom: 0.75rem;"></i>
-              <h4 style="font-size: 1.15rem; font-weight: 800; color: var(--text-primary);">No Personal Tasks or Doubts Found</h4>
-              <p style="font-size: 0.85rem; color: var(--text-secondary); max-width: 460px; margin: 0.35rem auto 1.25rem;">
-                You have not asked any doubts or accepted any peer tasks yet. Ask a doubt for free or accept an open doubt from the Common Support Hub!
-              </p>
-              <button class="btn btn-primary btn-sm" onclick="window.app.openCreateSupportModal()">
-                <i class="fa-solid fa-plus-circle"></i> Ask a Doubt Now (0 Cr)
-              </button>
-            </div>
-          `;
-        } else if (this.supportFilter === 'OPEN') {
-          container.innerHTML = `
-            <div style="grid-column: 1 / -1; text-align: center; padding: 3rem 1.5rem; background: var(--bg-card); border-radius: var(--radius-xl); border: 1px dashed var(--border-medium);">
-              <i class="fa-solid fa-circle-check" style="font-size: 2.5rem; color: #10b981; margin-bottom: 0.75rem;"></i>
-              <h4 style="font-size: 1.15rem; font-weight: 800; color: var(--text-primary);">All Doubts Are Claimed or Solved!</h4>
-              <p style="font-size: 0.85rem; color: var(--text-secondary); max-width: 440px; margin: 0.35rem auto 1.25rem;">
-                There are no unassigned open doubts right now. Check back soon or raise a new question.
-              </p>
-              <button class="btn btn-primary btn-sm" onclick="window.app.openCreateSupportModal()">
-                <i class="fa-solid fa-plus-circle"></i> Ask a Doubt (0 Cr)
-              </button>
-            </div>
-          `;
-        } else {
-          container.innerHTML = `
-            <div style="grid-column: 1 / -1; text-align: center; padding: 3rem 1.5rem; background: var(--bg-card); border-radius: var(--radius-xl); border: 1px dashed var(--border-medium);">
-              <i class="fa-solid fa-headset" style="font-size: 2.5rem; color: var(--text-muted); margin-bottom: 0.75rem;"></i>
-              <h4 style="font-size: 1.15rem; font-weight: 800; color: var(--text-primary);">No Support Doubts Found</h4>
-              <p style="font-size: 0.85rem; color: var(--text-secondary); max-width: 440px; margin: 0.35rem auto 1.25rem;">
-                ${this.supportSearchQuery ? 'No doubts match your search query.' : 'Raise a doubt or ask for help in any engineering topic (Cost: 0 Credits).'}
-              </p>
-              <button class="btn btn-primary btn-sm" onclick="window.app.openCreateSupportModal()">
-                <i class="fa-solid fa-plus-circle"></i> Ask a Doubt Now (0 Cr)
-              </button>
-            </div>
-          `;
-        }
-        return;
-      }
-
-      const escapeHtml = (str) => {
-        if (!str) return '';
-        return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-      };
-
-      const renderAttachmentCardsList = (doubt) => {
-        const atts = doubt.attachments || [];
-        if (atts.length === 0 && doubt.attachment_data) {
-          atts.push({
-            id: 'dbt_att_' + doubt.id,
-            file_name: doubt.attachment_name || 'attachment',
-            file_type: doubt.attachment_data.startsWith('data:image/') ? 'image/png' : 'text/plain',
-            file_data: doubt.attachment_data,
-            file_size: doubt.attachment_data.length
-          });
-        }
-
-        if (atts.length === 0) return '';
-
-        return `
-          <div style="margin-top: 0.5rem;">
-            <div style="font-size: 0.76rem; font-weight: 700; color: var(--text-muted); margin-bottom: 0.35rem;">
-              📎 Attachments (${atts.length}):
-            </div>
-            <div style="display: grid; grid-template-columns: 1fr; gap: 0.4rem;">
-              ${atts.map((att, aIdx) => {
-          const info = this.getFileIconInfo(att.file_name, att.file_type);
-          const name = escapeHtml(att.file_name || 'attachment');
-          const sizeStr = this.formatBytes(att.file_size || att.size);
-          return `
-                  <div style="background: var(--bg-subtle); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 0.45rem 0.75rem; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;">
-                    <div style="display: flex; align-items: center; gap: 0.55rem; overflow: hidden; flex: 1;">
-                      <i class="${info.icon}" style="color: ${info.color}; font-size: 1.15rem; flex-shrink: 0;"></i>
-                      <div style="overflow: hidden; text-align: left;">
-                        <div style="font-weight: 700; font-size: 0.78rem; color: var(--text-primary); text-overflow: ellipsis; white-space: nowrap; overflow: hidden;" title="${name}">${name}</div>
-                        <div style="font-size: 0.67rem; color: var(--text-muted);">${info.ext} • ${sizeStr}</div>
-                      </div>
-                    </div>
-                    <div style="display: flex; gap: 0.3rem; flex-shrink: 0;">
-                      <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.previewDoubtAttachmentById('${doubt.id}', ${aIdx})" style="font-size: 0.7rem; padding: 0.2rem 0.5rem;">
-                        ${info.isCode ? 'View Code' : 'Preview'}
-                      </button>
-                      <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.downloadDoubtAttachmentById('${doubt.id}', ${aIdx})" style="font-size: 0.7rem; padding: 0.2rem 0.45rem;" title="Download">
-                        <i class="fa-solid fa-download"></i>
-                      </button>
-                    </div>
-                  </div>
-                `;
-        }).join('')}
-            </div>
-          </div>
-        `;
-      };
-
-      const renderAnswerAttachmentCardsList = (doubt) => {
-        const primaryAnswer = doubt.answers?.[0] || null;
-        const atts = doubt.answer_attachments || primaryAnswer?.attachments || [];
-        if (atts.length === 0) return '';
-
-        return `
-          <div style="margin-top: 0.5rem;">
-            <div style="font-size: 0.74rem; font-weight: 700; color: #10b981; margin-bottom: 0.3rem;">
-              📎 Solution Files (${atts.length}):
-            </div>
-            <div style="display: grid; grid-template-columns: 1fr; gap: 0.4rem;">
-              ${atts.map((att, aIdx) => {
-          const info = this.getFileIconInfo(att.file_name, att.file_type);
-          const name = escapeHtml(att.file_name || 'solution_file');
-          const sizeStr = this.formatBytes(att.file_size || att.size);
-          return `
-                  <div style="background: rgba(16, 185, 129, 0.05); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: var(--radius-sm); padding: 0.4rem 0.7rem; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;">
-                    <div style="display: flex; align-items: center; gap: 0.55rem; overflow: hidden; flex: 1;">
-                      <i class="${info.icon}" style="color: ${info.color}; font-size: 1.15rem; flex-shrink: 0;"></i>
-                      <div style="overflow: hidden; text-align: left;">
-                        <div style="font-weight: 700; font-size: 0.78rem; color: var(--text-primary); text-overflow: ellipsis; white-space: nowrap; overflow: hidden;">${name}</div>
-                        <div style="font-size: 0.67rem; color: var(--text-muted);">${info.ext} • ${sizeStr}</div>
-                      </div>
-                    </div>
-                    <div style="display: flex; gap: 0.3rem; flex-shrink: 0;">
-                      <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.previewAnswerAttachmentById('${doubt.id}', ${aIdx})" style="font-size: 0.7rem; padding: 0.2rem 0.5rem;">
-                        ${info.isCode ? 'View Code' : 'Preview'}
-                      </button>
-                      <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.downloadAnswerAttachmentById('${doubt.id}', ${aIdx})" style="font-size: 0.7rem; padding: 0.2rem 0.45rem;">
-                        <i class="fa-solid fa-download"></i>
-                      </button>
-                    </div>
-                  </div>
-                `;
-        }).join('')}
-            </div>
-          </div>
-        `;
-      };
-
-      container.innerHTML = filtered.map(t => {
-        const isAuthor = Boolean(currentUserId && (t.raised_by_user_id === currentUserId || t.student_id === currentUserId));
-        const isAcceptedByMe = Boolean(currentUserId && (t.accepted_by_user_id === currentUserId || t.support_mentor_id === currentUserId || (t.answers && t.answers.some(a => a.answered_by_user_id === currentUserId))));
-        const isOpen = (t.status === 'OPEN');
-        const isAccepted = (t.status === 'ACCEPTED' || t.status === 'CLAIMED');
-        const isResolved = (t.status === 'RESOLVED' || t.status === 'CLOSED');
-
-        const authorName = t.raised_by_name || t.student_name || t.raised_by_user_id || 'Student';
-        const solverName = t.accepted_by_name || t.support_mentor_name || t.accepted_by_user_id || 'Assigned Mentor';
-        const categoryLabel = t.category || t.course || t.skill_name || 'Technical Doubt';
-
-        const statusClass = isOpen ? 'open' : (isAccepted ? 'claimed' : 'resolved');
-        const statusBadgeHtml = isOpen
-          ? `<span class="support-status-pill open" style="background: rgba(245, 158, 11, 0.15); color: #d97706; font-weight: 800;"><i class="fa-solid fa-clock"></i> OPEN</span>`
-          : (isAccepted
-            ? `<span class="support-status-pill claimed" style="background: rgba(37, 99, 235, 0.15); color: #2563eb; font-weight: 800;"><i class="fa-solid fa-spinner fa-spin"></i> ACCEPTED</span>`
-            : `<span class="support-status-pill resolved" style="background: rgba(16, 185, 129, 0.15); color: #059669; font-weight: 800;"><i class="fa-solid fa-circle-check"></i> RESOLVED</span>`);
-
-        return `
-          <div class="support-card status-${statusClass}" id="doubtCard_${t.id}">
-            <div style="display: flex; flex-direction: column; gap: 0.75rem;">
-              <div class="support-card-top">
-                <div class="support-badge-group">
-                  <span class="support-tag tag-skill"><i class="fa-solid fa-book-open"></i> ${escapeHtml(categoryLabel)}</span>
-                  ${t.course && t.course !== categoryLabel ? `<span class="support-tag tag-concept">${escapeHtml(t.course)}</span>` : ''}
-                </div>
-                ${statusBadgeHtml}
-              </div>
-
-              <!-- Question Title & Description -->
-              <div>
-                <h3 class="support-card-title">${escapeHtml(t.title)}</h3>
-                <p class="support-card-desc" style="margin-top: 0.35rem;">${escapeHtml(t.description)}</p>
-              </div>
-
-              <!-- Code Snippet Box -->
-              ${t.code_snippet ? `
-                <pre class="support-code-box"><code>${escapeHtml(t.code_snippet)}</code></pre>
-              ` : ''}
-
-              <!-- Uploaded Attachments -->
-              ${renderAttachmentCardsList(t)}
-
-              <!-- ACCEPTED State Info Banner -->
-              ${isAccepted ? `
-                ${isAcceptedByMe ? `
-                  <div style="background: rgba(37, 99, 235, 0.08); border: 1px solid rgba(37, 99, 235, 0.25); border-radius: var(--radius-md); padding: 0.65rem 0.85rem; font-size: 0.8rem; color: #1d4ed8; font-weight: 700; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;">
-                    <span><i class="fa-solid fa-circle-check" style="color: #2563eb;"></i> You accepted this doubt. Write and submit your answer below.</span>
-                    <span style="background: #2563eb; color: #ffffff; padding: 0.15rem 0.45rem; border-radius: var(--radius-sm); font-size: 0.7rem;">Your Task</span>
-                  </div>
-                ` : (isAuthor ? `
-                  <div style="background: rgba(37, 99, 235, 0.08); border: 1px solid rgba(37, 99, 235, 0.25); border-radius: var(--radius-md); padding: 0.65rem 0.85rem; font-size: 0.8rem; color: #1d4ed8; font-weight: 700;">
-                    <i class="fa-solid fa-user-check" style="color: #2563eb;"></i> Your doubt has been accepted by <strong>${escapeHtml(solverName)}</strong>. ⏳ Waiting for the solution...
-                  </div>
-                ` : `
-                  <div style="background: rgba(100, 116, 139, 0.08); border: 1px solid rgba(100, 116, 139, 0.2); border-radius: var(--radius-md); padding: 0.65rem 0.85rem; font-size: 0.8rem; color: var(--text-secondary); font-weight: 600;">
-                    <i class="fa-solid fa-lock" style="color: #64748b;"></i> Accepted by <strong>${escapeHtml(solverName)}</strong>. Mentor is currently solving this doubt.
-                  </div>
-                `)}
-              ` : ''}
-
-              <!-- RESOLVED Solution Box -->
-              ${isResolved ? `
-                <div class="support-solution-box">
-                  <div class="support-solution-header">
-                    <span><i class="fa-solid fa-user-check"></i> Answered by ${escapeHtml(solverName)}</span>
-                    <span style="font-weight: 800; color: var(--accent-emerald);">+${t.reward_credits || '1.5'} Cr Bounty</span>
-                  </div>
-                  <div style="font-size: 0.74rem; font-weight: 700; color: var(--text-muted);">
-                    Classification: <span style="color: var(--primary);">${escapeHtml(t.mentor_classification || 'Level 1: Syntax / Typo')}</span>
-                  </div>
-                  <div class="support-solution-body">${escapeHtml(t.mentor_solution || 'Verified solution provided.')}</div>
-
-                  <!-- Answer Solution Attachments -->
-                  ${renderAnswerAttachmentCardsList(t)}
-
-                  ${t.recommended_assessment_skill ? `
-                    <div class="support-quiz-recommendation-cta">
-                      <div>
-                        <strong>🎯 Follow-Up Assessment:</strong> Take 20-Q AI Quiz in <em>${escapeHtml(t.recommended_assessment_skill)}</em>
-                      </div>
-                      <button class="btn btn-primary btn-sm" style="font-size: 0.72rem; padding: 0.25rem 0.6rem;" onclick="window.app.startQuiz('${t.recommended_assessment_skill}')">
-                        <i class="fa-solid fa-play"></i> Take Quiz
-                      </button>
-                    </div>
-                  ` : ''}
-
-                  <!-- Rating Section with 3-Star Reward Gate Feedback -->
-                  ${isAuthor ? `
-                    <div style="border-top: 1px dashed var(--border-subtle); padding-top: 0.75rem; margin-top: 0.5rem; background: ${t.rating ? 'rgba(16, 185, 129, 0.04)' : 'rgba(245, 158, 11, 0.04)'}; border-radius: var(--radius-md); padding: 0.75rem;">
-                      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
-                        <div>
-                          <div style="font-size: 0.88rem; font-weight: 800; color: var(--text-primary); display: flex; align-items: center; gap: 0.35rem;">
-                            <span>${t.rating ? 'Student Rating (Submitted & Locked):' : 'Rate Mentor\'s Solution:'}</span>
-                          </div>
-                          <div style="font-size: 0.73rem; color: var(--text-secondary); margin-top: 0.2rem;">
-                            ${t.rating
-                ? (t.rating >= 3
-                  ? `<span style="color: #059669; font-weight: 700;">🎉 Rated ${t.rating}★ — +${t.reward_credits || 0.5} Cr bounty released to mentor!</span>`
-                  : `<span style="color: #d97706; font-weight: 700;">⭐ Rated ${t.rating}★ (Feedback saved. Mentor bounty requires rating ≥ 3★).</span>`)
-                : `Rate 3★ or above to release +${t.reward_credits || 0.5} Cr bounty to mentor.`}
-                          </div>
-                        </div>
-                        ${t.rating ? `
-                          <div style="display: flex; gap: 0.25rem; align-items: center;" title="Rating Locked (${t.rating} Stars)">
-                            ${[1, 2, 3, 4, 5].map(star => `
-                              <i class="fa-${t.rating >= star ? 'solid' : 'regular'} fa-star" style="color: #f59e0b; font-size: 1.25rem;"></i>
-                            `).join('')}
-                          </div>
-                        ` : `
-                          <div class="support-star-rating">
-                            ${[1, 2, 3, 4, 5].map(star => `
-                              <button type="button" class="star-btn" onclick="window.app.rateSupportTicket('${t.id}', ${star})" title="Rate ${star} Stars">
-                                <i class="fa-${(t.rating || 0) >= star ? 'solid' : 'regular'} fa-star" style="color: #f59e0b; font-size: 1.25rem;"></i>
-                              </button>
-                            `).join('')}
-                          </div>
-                        `}
-                      </div>
-                    </div>
-                  ` : (isAcceptedByMe ? `
-                    ${t.rating ? `
-                      <div style="border-top: 1px dashed var(--border-subtle); margin-top: 0.5rem; background: ${t.rating >= 3 ? 'rgba(16, 185, 129, 0.08)' : 'rgba(245, 158, 11, 0.08)'}; border: 1.5px solid ${t.rating >= 3 ? 'rgba(16, 185, 129, 0.3)' : 'rgba(245, 158, 11, 0.3)'}; border-radius: var(--radius-md); padding: 0.75rem;">
-                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
-                          <div>
-                            <div style="font-size: 0.88rem; font-weight: 800; color: ${t.rating >= 3 ? '#059669' : '#d97706'}; display: flex; align-items: center; gap: 0.4rem;">
-                              <i class="fa-solid fa-${t.rating >= 3 ? 'trophy' : 'star'}"></i>
-                              <span>Student Rating: ${t.rating} / 5 Stars</span>
-                            </div>
-                            <div style="font-size: 0.76rem; color: var(--text-primary); margin-top: 0.25rem; font-weight: 600;">
-                              ${t.rating >= 3
-                  ? `🎉 +${t.reward_credits || 0.5} Credits bounty deposited into your wallet! Your score & balance have increased.`
-                  : `⚠️ Student rated ${t.rating}★. Mentor credit bounty requires 3★ or above.`}
-                            </div>
-                          </div>
-                          <div class="support-star-rating">
-                            ${[1, 2, 3, 4, 5].map(star => `
-                              <i class="fa-${(t.rating || 0) >= star ? 'solid' : 'regular'} fa-star" style="color: #f59e0b; font-size: 1.25rem;"></i>
-                            `).join('')}
-                          </div>
-                        </div>
-                      </div>
-                    ` : `
-                      <div style="border-top: 1px dashed var(--border-subtle); padding-top: 0.6rem; margin-top: 0.4rem; background: rgba(37, 99, 235, 0.06); border: 1px solid rgba(37, 99, 235, 0.2); border-radius: var(--radius-md); padding: 0.65rem 0.85rem; font-size: 0.78rem; color: #1d4ed8; font-weight: 600; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;">
-                        <div style="display: flex; align-items: center; gap: 0.45rem;">
-                          <i class="fa-solid fa-hourglass-half fa-spin"></i>
-                          <span>Waiting for student to review & rate solution.</span>
-                        </div>
-                        <span style="font-size: 0.72rem; background: #2563eb; color: #fff; padding: 0.15rem 0.5rem; border-radius: var(--radius-sm); font-weight: 700;">
-                          +${t.reward_credits || 0.5} Cr on ≥3★
-                        </span>
-                      </div>
-                    `}
-                  ` : `
-                    ${t.rating ? `
-                      <div style="border-top: 1px dashed var(--border-subtle); padding-top: 0.6rem; margin-top: 0.4rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.4rem;">
-                        <div style="display: flex; align-items: center; gap: 0.4rem;">
-                          <span style="font-size: 0.78rem; font-weight: 700; color: var(--text-secondary);">Student Rating:</span>
-                          <span style="font-size: 0.82rem; font-weight: 800; color: ${t.rating >= 3 ? '#10b981' : '#f59e0b'};">
-                            ${t.rating} / 5 Stars ${t.rating >= 3 ? '(Reward Released ✓)' : ''}
-                          </span>
-                        </div>
-                        <div class="support-star-rating">
-                          ${[1, 2, 3, 4, 5].map(star => `
-                            <i class="fa-${(t.rating || 0) >= star ? 'solid' : 'regular'} fa-star" style="color: #f59e0b; font-size: 1.15rem;"></i>
-                          `).join('')}
-                        </div>
-                      </div>
-                    ` : `
-                      <div style="border-top: 1px dashed var(--border-subtle); padding-top: 0.5rem; margin-top: 0.35rem; font-size: 0.74rem; color: var(--text-muted); text-align: right;">
-                        <i class="fa-solid fa-clock"></i> Awaiting Student Rating (3★ or above releases +${t.reward_credits || 0.5} Cr mentor bounty)
-                      </div>
-                    `}
-                  `)}
-                </div>
-              ` : ''}
-            </div>
-
-            <!-- Footer Meta & Actions -->
-            <div style="margin-top: 0.75rem;">
-              <div class="support-meta-row">
-                <div>
-                  <i class="fa-regular fa-user"></i> Asked by: <strong>${escapeHtml(authorName)}</strong>
-                </div>
-                <div style="display: flex; align-items: center; gap: 0.5rem;">
-                  <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.openViewFullDoubtModal('${t.id}')" style="font-size: 0.72rem; padding: 0.2rem 0.5rem;">
-                    <i class="fa-solid fa-expand"></i> Details
-                  </button>
-                  <div class="support-bounty-badge">
-                    <i class="fa-solid fa-coins"></i> ${isOpen ? `Bounty: +${t.reward_credits || '1.5'} Cr` : (isResolved ? `Awarded: +${t.reward_credits} Cr` : 'In Triage')}
-                  </div>
-                </div>
-              </div>
-
-              <!-- Action Buttons according to State & Persona Permissions -->
-              <div style="display: flex; gap: 0.5rem; margin-top: 0.75rem;">
-                ${isOpen && !isAuthor ? `
-                  <button class="btn btn-primary btn-sm" style="flex: 1;" onclick="window.app.acceptSupportDoubt('${t.id}', this)">
-                    <i class="fa-solid fa-hand-holding-hand"></i> Accept Doubt (+${t.reward_credits || 1.5} Cr)
-                  </button>
-                ` : ''}
-
-                ${isOpen && isAuthor ? `
-                  <div style="font-size: 0.78rem; color: #d97706; font-weight: 700; display: flex; align-items: center; gap: 0.35rem; padding: 0.4rem 0;">
-                    <i class="fa-solid fa-hourglass-half"></i> Open • Waiting for a peer tutor to accept (0 Cr cost)
-                  </div>
-                ` : ''}
-
-                ${isAccepted && isAcceptedByMe ? `
-                  <button class="btn btn-emerald btn-sm" style="flex: 1; background: #10b981; border-color: #10b981; color: white;" onclick="window.app.openResolveSupportModal('${t.id}')">
-                    <i class="fa-solid fa-graduation-cap"></i> Submit Answer (+${t.reward_credits || 1.5} Cr)
-                  </button>
-                ` : ''}
-              </div>
-            </div>
-          </div>
-        `;
-      }).join('');
-    },
-
-    startSessionTimer(session) {
-      if (this.timerInterval) clearInterval(this.timerInterval);
-      const display = document.getElementById('sessionTimerDisplay');
-
-      const isOneOnOne = session && session.session_type !== 'GROUP_COHORT';
-      const hasBothJoined = session && (
-        session.meeting_started_at ||
-        (window.skillSwapConference && window.skillSwapConference.remoteUsers && window.skillSwapConference.remoteUsers.size > 0)
-      );
-
-      const currentPersona = window.store?.getCurrentPersona() || {};
-      const isTeacher = session && (session.teacher_id === currentPersona.id || session.teacher?.id === currentPersona.id);
-
-      if (isOneOnOne && !hasBothJoined && display) {
-        display.textContent = isTeacher ? 'Waiting for student to join' : 'Waiting for host to join';
-        return;
-      }
-
-      let startedMs = Date.now();
-      let totalDurationSecs = 1800;
-
-      if (session) {
-        totalDurationSecs = Math.round((Number(session.hours) || 1) * 3600);
-        if (session.meeting_started_at) {
-          const rawDateStr = String(session.meeting_started_at).trim();
-          const isoUtcStr = rawDateStr.includes('T') ? (rawDateStr.endsWith('Z') || rawDateStr.includes('+') ? rawDateStr : rawDateStr + 'Z') : (rawDateStr.replace(' ', 'T') + 'Z');
-          const parsedMs = new Date(isoUtcStr).getTime();
-          if (!isNaN(parsedMs)) {
-            startedMs = parsedMs;
-          }
-        }
-      }
-
-      const updateDisplay = () => {
-        if (!display) return;
-        const nowMs = Date.now();
-        const elapsedSecs = Math.max(0, Math.floor((nowMs - startedMs) / 1000));
-        const remainingSecs = Math.max(0, totalDurationSecs - elapsedSecs);
-        this.timerSeconds = remainingSecs;
-
-        if (remainingSecs <= 0) {
-          if (display) display.textContent = '00:00:00 SESSION ENDED';
-          if (this.timerInterval) {
-            clearInterval(this.timerInterval);
-            this.timerInterval = null;
-          }
-          this.handleTimerExpired(session);
-          return;
-        }
-
-        const hrs = String(Math.floor(remainingSecs / 3600)).padStart(2, '0');
-        const mins = String(Math.floor((remainingSecs % 3600) / 60)).padStart(2, '0');
-        const secs = String(remainingSecs % 60).padStart(2, '0');
-        display.textContent = `${hrs}:${mins}:${secs} REMAINING`;
-      };
-
-      updateDisplay();
-
-      this.timerInterval = setInterval(() => {
-        updateDisplay();
-      }, 1000);
-    },
-
-    async handleTimerExpired(session) {
-      const display = document.getElementById('sessionTimerDisplay');
-      if (display) display.textContent = '00:00:00 SESSION ENDED';
-
-      if (window.skillSwapConference && window.skillSwapConference.handleRemoteSessionEnded) {
-        window.skillSwapConference.handleRemoteSessionEnded('The scheduled session time has expired.');
-      }
-
-      if (session && session.id) {
-        try {
-          if (session.session_type === 'GROUP_COHORT') {
-            await fetch(`/api/sessions/${session.id}/complete-cohort`, {
-              method: 'POST',
-              headers: window.store?.getAuthHeaders() || {}
-            });
-          } else if (window.store?.completeSessionAndReleaseEscrow) {
-            await window.store.completeSessionAndReleaseEscrow(session.id, 5, 'Session completed when time expired', ['Punctual', 'Helpful']);
-          }
-        } catch (e) {
-          console.warn('Auto completion on timer expiry note:', e.message);
-        }
-      }
-
-      try {
-        if (window.store?.fetchSessions) {
-          await window.store.fetchSessions();
-        }
-        if (this.renderSessionsView) {
-          this.renderSessionsView();
-        }
-      } catch (e) { }
-    },
-
-    stopSessionTimer() {
-      if (this.timerInterval) {
-        clearInterval(this.timerInterval);
-        this.timerInterval = null;
-      }
-      const display = document.getElementById('sessionTimerDisplay');
-      if (display) {
-        display.textContent = '00:00:00 SESSION ENDED';
-      }
-    },
-
-    showToast(message, iconType = 'info') {
-      const container = document.getElementById('toastContainer');
-      if (!container) return;
-
-      const toast = document.createElement('div');
-      toast.className = 'toast';
-
-      let icon = 'fa-circle-info';
-      if (iconType === 'check' || iconType === 'coins') icon = 'fa-circle-check" style="color: var(--accent-emerald);';
-      if (iconType === 'lock') icon = 'fa-lock" style="color: var(--accent-amber);';
-      if (iconType === 'plus') icon = 'fa-plus-circle" style="color: var(--primary);';
-      if (iconType === 'message') icon = 'fa-comment" style="color: var(--secondary);';
-      if (iconType === 'user') icon = 'fa-user-astronaut" style="color: var(--primary);';
-
-      toast.innerHTML = `
-        <div class="toast-icon"><i class="fa-solid ${icon}"></i></div>
-        <div class="toast-text">
-          <h5>SkillSwap Merit Update</h5>
-          <p>${message}</p>
-        </div>
-      `;
-
-      container.appendChild(toast);
-
-      setTimeout(() => {
-        toast.style.opacity = '0';
-        toast.style.transform = 'translateY(10px)';
-        toast.style.transition = '0.3s ease';
-        setTimeout(() => toast.remove(), 300);
-      }, 4000);
-    },
-
-    escapeHtml(str) {
-      if (!str) return '';
-      return String(str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
-    },
-
-    escapeQuotes(str) {
-      if (!str) return '';
-      return String(str).replace(/'/g, "\\'").replace(/"/g, '&quot;');
     }
   };
 
+  // Expose app to window
   window.app = app;
 
-  if (document.readyState === 'complete' || document.readyState === 'interactive') {
-    app.init();
-  } else {
-    document.addEventListener('DOMContentLoaded', async () => {
-      window.app = app;
-      await app.init();
+  // Initialize app
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+      if (typeof app.init === 'function') app.init();
     });
+  } else {
+    if (typeof app.init === 'function') app.init();
   }
 })();

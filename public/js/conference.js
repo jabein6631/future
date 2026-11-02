@@ -150,8 +150,12 @@ class SkillSwapConference {
               return;
             }
             e.preventDefault();
-            if (window.app?.showToast) {
-              window.app.showToast('Code workspace is controlled by host (Read-Only)', 'lock');
+            if (window.app?.notify) {
+              window.app.notify({
+                title: 'Workspace',
+                message: 'Code workspace is controlled by host (Read-Only)',
+                type: 'lock'
+              });
             }
           }
         };
@@ -193,8 +197,12 @@ class SkillSwapConference {
       // Create empty/dummy media stream so WebRTC connection proceeds gracefully
       this.localStream = this.createFallbackMediaStream();
       this.isVideoOff = true;
-      if (window.app?.showToast) {
-        window.app.showToast('Camera/Mic permission not granted or unavailable. Joined meeting in spectator preview mode.', 'info');
+      if (window.app?.notify) {
+        window.app.notify({
+          title: 'Spectator Mode',
+          message: 'Camera/Mic permission not granted or unavailable. Joined meeting in spectator preview mode.',
+          type: 'info'
+        });
       }
     }
 
@@ -434,11 +442,12 @@ class SkillSwapConference {
           this.remoteUsers.set(uKey, userProfile);
           this.updateParticipantCount();
 
-          if (isNewPeer && window.app?.showToast) {
-            window.app.showToast(`👋 ${userProfile?.name || 'Peer'} joined the live meeting!`, 'user');
-          }
-          if (window.app && this.currentSessionData) {
-            window.app.startSessionTimer(this.currentSessionData);
+          if (isNewPeer && window.app?.notify) {
+            window.app.notify({
+              title: 'Classroom Activity',
+              message: `👋 ${userProfile?.name || 'Peer'} joined the live meeting!`,
+              type: 'user'
+            });
           }
           // Initiate WebRTC connection if not already created
           if (!this.peerConnections.has(remoteId)) {
@@ -746,22 +755,12 @@ class SkillSwapConference {
 
     this.updateParticipantCount();
 
-    // If 1-on-1 and peer left, show notification
-    if (this.remoteUsers.size === 0 && this.currentSessionData && this.currentSessionData.session_type !== 'GROUP_COHORT') {
-      const display = document.getElementById('sessionTimerDisplay');
-      if (display && !display.textContent.includes('ENDED')) {
-        const meetingStarted = !!this.currentSessionData.meeting_started_at;
-        if (meetingStarted) {
-          display.textContent = 'PEER DISCONNECTED (PAUSED)';
-        } else {
-          const isHost = this.currentUserProfile?.isHost;
-          display.textContent = isHost ? 'Waiting for student to join' : 'Waiting for host to join';
-        }
-      }
-    }
-
-    if (window.app?.showToast) {
-      window.app.showToast('A participant has left the meeting.', 'info');
+    if (window.app?.notify) {
+      window.app.notify({
+        title: 'Classroom Activity',
+        message: 'A participant has left the meeting.',
+        type: 'info'
+      });
     }
   }
 
@@ -785,9 +784,6 @@ class SkillSwapConference {
     });
 
     this.updateMediaButtonsUI();
-    if (window.app?.showToast) {
-      window.app.showToast(this.isAudioMuted ? 'Microphone Muted' : 'Microphone Live (Unmuted)', this.isAudioMuted ? 'microphone-slash' : 'microphone');
-    }
     return this.isAudioMuted;
   }
 
@@ -808,9 +804,6 @@ class SkillSwapConference {
     });
 
     this.updateMediaButtonsUI();
-    if (window.app?.showToast) {
-      window.app.showToast(this.isVideoOff ? 'Camera Stopped' : 'Camera Live', this.isVideoOff ? 'video-slash' : 'video');
-    }
     return this.isVideoOff;
   }
 
@@ -871,7 +864,6 @@ class SkillSwapConference {
         };
 
         this.isScreenSharing = true;
-        if (window.app?.showToast) window.app.showToast('Screen sharing started', 'desktop');
       } catch (err) {
         console.warn('Screen share cancelled or failed:', err.message);
       }
@@ -917,7 +909,6 @@ class SkillSwapConference {
 
     this.isScreenSharing = false;
     this.updateMediaButtonsUI();
-    if (window.app?.showToast) window.app.showToast('Screen sharing stopped', 'desktop');
   }
 
   async leaveMeeting(isRemoteEnded = false) {
@@ -939,15 +930,25 @@ class SkillSwapConference {
         console.warn('Error ending session on backend:', err);
       }
 
-      if (window.app?.showToast) {
-        window.app.showToast('Session ended permanently by host.', 'phone-slash');
+      if (window.app?.notify) {
+        window.app.notify({
+          title: 'Session Ended',
+          message: 'Session ended permanently by host.',
+          type: 'calendar',
+          target_page: 'view-sessions'
+        });
       }
     } else if (!isHost && !isRemoteEnded) {
       console.log('🚪 Student leaving session (can rejoin later)...');
       this.sendSignalingMessage({ type: 'leave-room' });
 
-      if (window.app?.showToast) {
-        window.app.showToast('You left the live meeting. Session remains active.', 'phone-slash');
+      if (window.app?.notify) {
+        window.app.notify({
+          title: 'Left Classroom',
+          message: 'You left the live meeting. Session remains active.',
+          type: 'info',
+          target_page: 'view-sessions'
+        });
       }
     }
 
@@ -1047,8 +1048,13 @@ class SkillSwapConference {
       `;
     }
 
-    if (window.app?.showToast) {
-      window.app.showToast('This live session has ended.', 'clock');
+    if (window.app?.notify) {
+      window.app.notify({
+        title: 'Session Concluded',
+        message: 'This live session has ended.',
+        type: 'clock',
+        target_page: 'view-sessions'
+      });
     }
   }
 
@@ -1146,8 +1152,13 @@ class SkillSwapConference {
         });
         const data = await res.json();
         if (data.success && !data.alreadyReleased) {
-          if (window.app?.showToast) {
-            window.app.showToast(`🎉 50% Milestone Reached: ${data.transferredCredits} Credit transferred to mentor!`, 'coins');
+          if (window.app?.notify) {
+            window.app.notify({
+              title: '🎉 Escrow Milestone',
+              message: `50% Milestone Reached: ${data.transferredCredits} Credit transferred to mentor!`,
+              type: 'coins',
+              target_page: 'view-wallet'
+            });
           }
           if (window.store) {
             await window.store.fetchWallet();

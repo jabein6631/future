@@ -369,8 +369,13 @@
       <!-- Notifications Dropdown -->
       <div class="notif-dropdown" id="notifDropdown">
         <div class="notif-header">
-          <span>Notifications</span>
-          <button class="btn-sm btn-secondary" id="markAllReadBtn">Mark read</button>
+          <div class="notif-header-title">
+            <span>Notifications</span>
+            <span class="notif-header-badge" id="notifHeaderUnreadBadge" style="display: none;">0 unread</span>
+          </div>
+          <div class="notif-header-actions">
+            <button type="button" class="notif-mark-all-btn" id="markAllReadBtn" title="Mark all notifications as read">Mark all as read</button>
+          </div>
         </div>
         <div class="notif-list" id="notifListContainer">
           <!-- Populated via JS -->
@@ -1880,22 +1885,44 @@
             </div>
 
             <!-- Search & Filters -->
-            <div style="display: flex; gap: 0.75rem; margin-bottom: 1.25rem;">
-              <div style="flex: 1; position: relative;">
-                <i class="fa-solid fa-magnifying-glass"
-                  style="position: absolute; left: 0.85rem; top: 50%; transform: translateY(-50%); color: #94a3b8; font-size: 0.85rem;"></i>
-                <input type="text" class="form-control" id="bookingMentorSearchInput"
-                  placeholder="Search by name, skill, or keyword..."
-                  style="width: 100%; padding-left: 2.25rem; font-size: 0.88rem; border-radius: 8px;">
+              <div style="display: flex; gap: 0.75rem; margin-bottom: 0.75rem;">
+                <div style="flex: 1; position: relative;">
+                  <i class="fa-solid fa-magnifying-glass"
+                    style="position: absolute; left: 0.85rem; top: 50%; transform: translateY(-50%); color: #94a3b8; font-size: 0.85rem;"></i>
+                  <input type="text" class="form-control" id="bookingMentorSearchInput"
+                    placeholder="Search mentors by name, skills, languages, department..."
+                    style="width: 100%; padding-left: 2.25rem; font-size: 0.88rem; border-radius: 8px;">
+                </div>
+                <button type="button" class="btn btn-outline" id="bookingMentorFilterBtn"
+                  style="border: 1px solid #cbd5e1; background: #fff; color: #475569; font-weight: 600; font-size: 0.85rem; padding: 0.5rem 0.9rem; border-radius: 8px; display: inline-flex; align-items: center; gap: 0.4rem;">
+                  <i class="fa-solid fa-filter"></i> Filters
+                </button>
               </div>
-              <button type="button" class="btn btn-outline" id="bookingMentorFilterBtn"
-                style="border: 1px solid #cbd5e1; background: #fff; color: #475569; font-weight: 600; font-size: 0.85rem; padding: 0.5rem 0.9rem; border-radius: 8px; display: inline-flex; align-items: center; gap: 0.4rem;">
-                <i class="fa-solid fa-filter"></i> Filters
-              </button>
-            </div>
 
-            <!-- Mentors List Container -->
-            <div id="bookingMentorCardsList" style="display: flex; flex-direction: column; gap: 0.85rem;">
+              <!-- Quick Tier & Availability Filters -->
+              <div id="bookingMentorFilterBar" style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1.25rem;">
+                <button type="button" class="btn-mentor-filter active" data-filter-tier="all" style="padding: 0.35rem 0.85rem; border-radius: 20px; font-size: 0.8rem; font-weight: 700; border: 1px solid #2563eb; background: #2563eb; color: #fff; cursor: pointer; transition: all 0.2s;">
+                  All Mentors
+                </button>
+                <button type="button" class="btn-mentor-filter" data-filter-tier="elite" style="padding: 0.35rem 0.85rem; border-radius: 20px; font-size: 0.8rem; font-weight: 700; border: 1px solid #cbd5e1; background: #fff; color: #b45309; cursor: pointer; transition: all 0.2s;">
+                  🥇 Elite Master (2.5 Cr/hr)
+                </button>
+                <button type="button" class="btn-mentor-filter" data-filter-tier="advanced" style="padding: 0.35rem 0.85rem; border-radius: 20px; font-size: 0.8rem; font-weight: 700; border: 1px solid #cbd5e1; background: #fff; color: #0284c7; cursor: pointer; transition: all 0.2s;">
+                  🎖️ Advanced Tutor (2.0 Cr/hr)
+                </button>
+                <button type="button" class="btn-mentor-filter" data-filter-tier="silver" style="padding: 0.35rem 0.85rem; border-radius: 20px; font-size: 0.8rem; font-weight: 700; border: 1px solid #cbd5e1; background: #fff; color: #475569; cursor: pointer; transition: all 0.2s;">
+                  🥈 Silver Tutor (1.5 Cr/hr)
+                </button>
+                <button type="button" class="btn-mentor-filter" data-filter-tier="bronze" style="padding: 0.35rem 0.85rem; border-radius: 20px; font-size: 0.8rem; font-weight: 700; border: 1px solid #cbd5e1; background: #fff; color: #92400e; cursor: pointer; transition: all 0.2s;">
+                  🥉 Bronze Tutor (1.0 Cr/hr)
+                </button>
+                <button type="button" class="btn-mentor-filter" data-filter-tier="available" style="padding: 0.35rem 0.85rem; border-radius: 20px; font-size: 0.8rem; font-weight: 700; border: 1px solid #cbd5e1; background: #fff; color: #16a34a; cursor: pointer; transition: all 0.2s;">
+                  🟢 Available Today
+                </button>
+              </div>
+
+              <!-- Mentors List Container -->
+              <div id="bookingMentorCardsList" style="display: flex; flex-direction: column; gap: 0.85rem;">
               <!-- Populated dynamically via JS -->
             </div>
 
@@ -6106,7 +6133,6 @@ function solveExercise() {
   </div>
 </div>
 
-<!-- Toast Notifications Container -->
-<div class="toast-container" id="toastContainer"></div>
+<!-- Centralized Notification Hub Active via Top-Right Bell (Toast popups permanently disabled) -->
 
 <!-- Scripts -->

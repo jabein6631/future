@@ -43,11 +43,13 @@ function determineTutorTier(quizScore = 0, hasCertificate = false) {
   if (isHighQuiz && hasCertificate) {
     return { tier: 'Elite Master', badge: '🥇 Elite Master Tutor', rate: 2.5 };
   } else if (isPassed && hasCertificate) {
-    return { tier: 'Advanced', badge: '🎖️ Advanced Tutor', rate: 2.0 };
+    return { tier: 'Advanced Tutor', badge: '🎖️ Advanced Tutor', rate: 2.0 };
+  } else if (hasCertificate) {
+    return { tier: 'Advanced Tutor', badge: '🎖️ Advanced Tutor', rate: 2.0 };
   } else if (isHighQuiz && !hasCertificate) {
-    return { tier: 'Silver', badge: '🥈 Silver Tutor', rate: 1.5 };
+    return { tier: 'Silver Tutor', badge: '🥈 Silver Tutor', rate: 1.5 };
   } else if (isPassed) {
-    return { tier: 'Bronze', badge: '🥉 Bronze Tutor', rate: 1.0 };
+    return { tier: 'Bronze Tutor', badge: '🥉 Bronze Tutor', rate: 1.0 };
   } else {
     return { tier: 'Unverified', badge: 'Unverified', rate: 1.0 };
   }
@@ -744,6 +746,7 @@ const dbProvider = {
   },
 
   async getSessions() {
+    await this.checkAndUpdateLiveAndExpiredSessions();
     const sessions = await db.allAsync(`SELECT * FROM sessions ORDER BY created_at DESC`);
     const attendees = await db.allAsync(`SELECT * FROM session_attendees ORDER BY joined_at ASC`);
     const users = await db.allAsync(`SELECT id, name, avatar FROM users`);
@@ -755,8 +758,10 @@ const dbProvider = {
       const teacher = userMap[s.teacher_id];
       const student = userMap[s.student_id];
       const isGroup = s.session_type === 'GROUP_COHORT';
+      const timing = this.getScheduledStartAndEndTimes(s);
       return {
         ...s,
+        timing,
         teacherName: teacher ? teacher.name : s.teacher_id,
         teacherAvatar: teacher ? (teacher.avatar || s.teacher_id) : s.teacher_id,
         studentName: isGroup ? `${sessAttendees.length} Students Enrolled` : (student ? student.name : s.student_id),
@@ -1122,61 +1127,150 @@ const dbProvider = {
   },
 
   async getBookingMentors(filter = {}) {
-    const users = await db.allAsync(`SELECT * FROM users WHERE is_admin = 0 ORDER BY rating DESC, reviews_count DESC`);
+    // 1. Fetch non-admin users from Turso DB
+    const users = await db.allAsync(`SELECT * FROM users WHERE is_admin = 0 ORDER BY rating DESC, reviews_count DESC`) || [];
     const mentors = [];
+
     for (const u of users) {
-      if (filter.excludeUserId && u.id === filter.excludeUserId) {
+      // Exclude currently logged in user
+      if (filter.excludeUserId && (u.id === filter.excludeUserId || u.email === filter.excludeUserId)) {
         continue;
       }
-      const skills = await db.allAsync(`SELECT * FROM skills_offered WHERE user_id = ?`, [u.id]);
-      if (skills.length === 0 && !['akki', 'sri', 'rishi', 'bharath'].some(n => (u.name || '').toLowerCase().includes(n))) {
+      // Exclude suspended or inactive users
+      if (u.is_active === 0 || u.status === 'suspended' || u.status === 'INACTIVE') {
         continue;
       }
-      const certs = await db.allAsync(`SELECT * FROM certificates WHERE user_id = ?`, [u.id]);
-      const attempts = await db.allAsync(`SELECT * FROM quiz_attempts WHERE user_id = ?`, [u.id]);
-      const maxScore = attempts.reduce((max, a) => Math.max(max, a.score_percent || 0), 0);
-      const tierInfo = determineTutorTier(maxScore, certs.length > 0);
 
-      const skillRate = skills.length > 0 ? Number(skills[0].rate || tierInfo.rate) : tierInfo.rate;
-      const effectiveRate = Number(skillRate || 2.5).toFixed(1);
+      // Query verified certificates from Turso
+      const certs = await db.allAsync(
+        `SELECT * FROM certificates WHERE user_id = ? AND (is_verified = 1 OR certificate_status = 'VERIFIED' OR tutor_eligible = 1)`,
+        [u.id]
+      ) || [];
 
-      let level = 'Peer Mentor';
-      if ((u.name || '').toLowerCase().includes('akki') || tierInfo.tier.includes('Elite') || (u.rating >= 4.8 && u.reviews_count >= 20)) {
-        level = 'Elite Mentor';
+      // Query quiz attempts from Turso
+      const attempts = await db.allAsync(
+        `SELECT * FROM quiz_attempts WHERE user_id = ?`,
+        [u.id]
+      ) || [];
+
+      const maxScore = attempts.reduce((max, a) => Math.max(max, Number(a.score_percent) || 0), 0);
+      const hasPassedQuiz = attempts.some(a => a.passed === 1 || Number(a.score_percent) >= 70);
+      const hasCert = certs.length > 0;
+
+      // Apply the 4-tier Tutor Eligibility Conditions
+      let tier = 'Unverified';
+      let badge = 'Unverified';
+      let rate = 1.0;
+
+      if (maxScore >= 90 && hasCert) {
+        tier = 'Elite Master';
+        badge = '🥇 Elite Master';
+        rate = 2.5;
+      } else if ((hasPassedQuiz && hasCert) || hasCert) {
+        tier = 'Advanced Tutor';
+        badge = '🎖️ Advanced Tutor';
+        rate = 2.0;
+      } else if (maxScore >= 90) {
+        tier = 'Silver Tutor';
+        badge = '🥈 Silver Tutor';
+        rate = 1.5;
+      } else if (hasPassedQuiz) {
+        tier = 'Bronze Tutor';
+        badge = '🥉 Bronze Tutor';
+        rate = 1.0;
       }
 
-      const lower = (u.name || '').toLowerCase();
-      let availString = 'Available Today 09:00 AM – 10:00 PM';
-      if (lower.includes('sri')) availString = 'Available Today 10:00 AM – 08:00 PM';
-      else if (lower.includes('rishi')) availString = 'Available Tomorrow 09:00 AM – 07:00 PM';
-      else if (lower.includes('bharath')) availString = 'Available Today 11:00 AM – 09:00 PM';
+      // Exclude accounts that do not meet any tutor tier eligibility
+      if (tier === 'Unverified') {
+        continue;
+      }
+
+      // Query skills offered from Turso
+      const skillsOffered = await db.allAsync(
+        `SELECT * FROM skills_offered WHERE user_id = ?`,
+        [u.id]
+      ) || [];
+
+      // Collect distinct skills from skills_offered, certificates, quiz attempts, and user major
+      const allSkills = [];
+      skillsOffered.forEach(s => {
+        if (s.name) allSkills.push(s.name.trim());
+      });
+      certs.forEach(c => {
+        if (c.skill_name) allSkills.push(c.skill_name.trim());
+        else if (c.title) allSkills.push(c.title.trim());
+      });
+      attempts.forEach(a => {
+        if ((a.passed === 1 || a.score_percent >= 70) && a.skill_name) {
+          allSkills.push(a.skill_name.trim());
+        }
+      });
+      if (allSkills.length === 0 && u.major && u.major !== '3rd') {
+        allSkills.push(u.major.trim());
+      }
+      if (allSkills.length === 0) {
+        allSkills.push('Peer Tutoring & Academic Mentorship');
+      }
+
+      // Deduplicate skills
+      const uniqueSkills = [...new Set(allSkills)].filter(Boolean);
+
+      // Department & Year
+      const department = (u.major && u.major !== '3rd') ? u.major : (u.department || 'Computer Science & Engineering');
+      const year = u.year || (u.major === '3rd' ? '3rd Year' : '3rd Year B.Tech');
+      const college = u.college || 'Vignan University';
+
+      // Availability status
+      const availability = 'Available Today 09:00 AM – 09:00 PM';
 
       mentors.push({
         id: u.id,
         name: u.name,
         email: u.email,
-        avatar: u.avatar || 'avatar_1',
-        college: u.college,
-        major: u.major,
-        level,
-        tier: tierInfo.tier,
+        avatar: u.avatar || u.id,
+        college,
+        major: department,
+        department,
+        year,
+        level: tier,
+        tier,
+        badge,
         rating: Number(u.rating || 5.0).toFixed(1),
-        reviews_count: u.reviews_count || 15,
-        rate: Number(effectiveRate),
-        rateDisplay: `${effectiveRate} Cr/hr`,
-        availability: availString,
-        skills: skills.map(s => s.name)
+        reviews_count: Number(u.reviews_count != null ? u.reviews_count : 16),
+        reviewsCount: Number(u.reviews_count != null ? u.reviews_count : 16),
+        rate: Number(rate),
+        rateDisplay: `${rate.toFixed(1)} Cr/hr`,
+        availability,
+        availabilityText: 'Available Today',
+        skills: uniqueSkills
       });
+    }
+
+    // Sort: Elite Master first, then Advanced, Silver, Bronze, and higher rating
+    const tierPriority = { 'Elite Master': 4, 'Advanced Tutor': 3, 'Silver Tutor': 2, 'Bronze Tutor': 1 };
+    mentors.sort((a, b) => {
+      const pDiff = (tierPriority[b.tier] || 0) - (tierPriority[a.tier] || 0);
+      if (pDiff !== 0) return pDiff;
+      return (Number(b.rating) || 0) - (Number(a.rating) || 0);
+    });
+
+    if (filter.tier && filter.tier !== 'all') {
+      const t = filter.tier.toLowerCase();
+      return mentors.filter(m => m.tier.toLowerCase().includes(t));
     }
 
     if (filter.search) {
       const q = filter.search.toLowerCase().trim();
       return mentors.filter(m =>
         m.name.toLowerCase().includes(q) ||
-        m.skills.some(s => s.toLowerCase().includes(q)) ||
-        m.level.toLowerCase().includes(q)
+        (m.department && m.department.toLowerCase().includes(q)) ||
+        (m.major && m.major.toLowerCase().includes(q)) ||
+        (m.college && m.college.toLowerCase().includes(q)) ||
+        m.tier.toLowerCase().includes(q) ||
+        m.skills.some(s => s.toLowerCase().includes(q))
       );
     }
+
     return mentors;
   },
 
@@ -3213,7 +3307,7 @@ const dbProvider = {
   },
 
   getScheduledStartAndEndTimes(session) {
-    if (!session) return { startTime: 0, endTime: 0, isStarted: false, isPastEnd: false };
+    if (!session) return { startTime: 0, endTime: 0, isStarted: false, isPastEnd: false, remainingMs: 0, startsInMs: 0 };
 
     let durationHours = 1.0;
     if (session.hours != null) {
@@ -3235,19 +3329,52 @@ const dbProvider = {
     }
     if (isNaN(durationHours) || durationHours <= 0) durationHours = 1.0;
 
+    // Direct millisecond timestamps if stored
+    if (session.scheduled_start_ms && Number(session.scheduled_start_ms) > 0) {
+      const startMs = Number(session.scheduled_start_ms);
+      const endMs = session.scheduled_end_ms ? Number(session.scheduled_end_ms) : (startMs + Math.round(durationHours * 3600000));
+      const nowMs = Date.now();
+      return {
+        startTime: startMs,
+        endTime: endMs,
+        isStarted: nowMs >= startMs,
+        isPastEnd: nowMs >= endMs,
+        remainingMs: Math.max(0, endMs - nowMs),
+        startsInMs: Math.max(0, startMs - nowMs)
+      };
+    }
+
     const dateStr = session.date || session.session_date || new Date().toISOString().split('T')[0];
     const timeStr = session.time || session.start_time || '08:00 PM';
 
-    let formattedDate = dateStr;
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(formattedDate)) {
-      const dObj = new Date(formattedDate);
-      if (!isNaN(dObj.getTime())) {
-        formattedDate = dObj.toISOString().split('T')[0];
+    let year = 2026, month = 11, day = 2;
+    const cleanDateStr = String(dateStr).trim();
+
+    // Check if DD-MM-YYYY or DD/MM/YYYY (common in India, UK, etc.)
+    const dmyMatch = cleanDateStr.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
+    if (dmyMatch) {
+      day = parseInt(dmyMatch[1], 10);
+      month = parseInt(dmyMatch[2], 10);
+      year = parseInt(dmyMatch[3], 10);
+    } else {
+      // Check if YYYY-MM-DD
+      const ymdMatch = cleanDateStr.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+      if (ymdMatch) {
+        year = parseInt(ymdMatch[1], 10);
+        month = parseInt(ymdMatch[2], 10);
+        day = parseInt(ymdMatch[3], 10);
+      } else {
+        const dObj = new Date(cleanDateStr);
+        if (!isNaN(dObj.getTime())) {
+          year = dObj.getFullYear();
+          month = dObj.getMonth() + 1;
+          day = dObj.getDate();
+        }
       }
     }
 
     let hours = 20, minutes = 0;
-    const tMatch = String(timeStr).match(/^(\d{1,2}):?(\d{2})?\s*(AM|PM)?$/i);
+    const tMatch = String(timeStr).trim().match(/^(\d{1,2}):?(\d{2})?\s*(AM|PM)?$/i);
     if (tMatch) {
       hours = parseInt(tMatch[1], 10);
       minutes = tMatch[2] ? parseInt(tMatch[2], 10) : 0;
@@ -3256,56 +3383,123 @@ const dbProvider = {
       if (ampm === 'AM' && hours === 12) hours = 0;
     }
 
-    const pad = (n) => String(n).padStart(2, '0');
-    let startMs = new Date(`${formattedDate}T${pad(hours)}:${pad(minutes)}:00`).getTime();
+    // Local timezone date construction (matches laptop system time)
+    const localScheduledDate = new Date(year, month - 1, day, hours, minutes, 0, 0);
+    let startMs = localScheduledDate.getTime();
     if (isNaN(startMs)) {
-      startMs = session.created_at ? new Date(session.created_at).getTime() : Date.now() - 3600000;
+      startMs = session.created_at ? new Date(session.created_at).getTime() : Date.now();
     }
 
-    const endMs = startMs + (durationHours * 3600000);
+    const endMs = startMs + Math.round(durationHours * 3600000);
     const nowMs = Date.now();
 
     return {
       startTime: startMs,
       endTime: endMs,
       isStarted: nowMs >= startMs,
-      isPastEnd: nowMs >= endMs
+      isPastEnd: nowMs >= endMs,
+      remainingMs: Math.max(0, endMs - nowMs),
+      startsInMs: Math.max(0, startMs - nowMs)
     };
   },
 
   isSessionExpired(session) {
     if (!session) return false;
     const st = (session.status || '').toUpperCase();
-    if (st === 'ENDED' || st === 'COMPLETED' || st === 'CANCELLED' || st === 'DECLINED') {
-      return true;
+    if (st === 'ENDED' || st === 'COMPLETED' || st === 'CANCELLED' || st === 'DECLINED' || st === 'DRAFT') {
+      return false;
     }
     const timing = this.getScheduledStartAndEndTimes(session);
     return timing.isPastEnd;
   },
 
   /**
-   * Scan active sessions and atomically update expired sessions to Completed status
+   * Scan active sessions and atomically update both Live and Expired sessions in Turso
    */
-  async checkAndUpdateExpiredSessions() {
+  async checkAndUpdateLiveAndExpiredSessions() {
     try {
       const candidateSessions = await db.allAsync(
         `SELECT * FROM sessions WHERE status NOT IN ('ENDED', 'Completed', 'CANCELLED', 'DECLINED')`
       );
+      const activatedSessionIds = [];
       const expiredSessionIds = [];
+
       for (const s of candidateSessions) {
-        if (this.isSessionExpired(s)) {
+        const timing = this.getScheduledStartAndEndTimes(s);
+        const currStatus = (s.status || '').toUpperCase();
+
+        if (timing.isPastEnd) {
           await db.runAsync(
             `UPDATE sessions SET status = 'Completed', meeting_ended_at = COALESCE(meeting_ended_at, CURRENT_TIMESTAMP) WHERE id = ?`,
             [s.id]
           );
           expiredSessionIds.push(s.id);
+        } else if (timing.isStarted) {
+          if (currStatus !== 'LIVE') {
+            await db.runAsync(
+              `UPDATE sessions SET status = 'Live', meeting_started_at = COALESCE(meeting_started_at, CURRENT_TIMESTAMP) WHERE id = ?`,
+              [s.id]
+            );
+            activatedSessionIds.push(s.id);
+
+            // Automatically notify mentor and enrolled students in Turso
+            const notifTitle = s.session_type === 'GROUP_COHORT' ? '🔴 Live Masterclass Started' : '🔴 Live Session Started';
+            const notifMsg = `The scheduled session "${s.title || s.skill || 'Session'}" is LIVE now! You can join the classroom.`;
+
+            // Notify mentor
+            if (s.teacher_id) {
+              const u = await db.getAsync(`SELECT id FROM users WHERE id = ?`, [s.teacher_id]);
+              if (u) {
+                const nid = 'notif_live_' + s.id + '_' + s.teacher_id;
+                await db.runAsync(
+                  `INSERT OR IGNORE INTO notifications (id, user_id, title, message, time, is_unread, type, target_page, created_at)
+                   VALUES (?, ?, ?, ?, 'Just now', 1, 'calendar', 'view-sessions', CURRENT_TIMESTAMP)`,
+                  [nid, s.teacher_id, notifTitle, notifMsg]
+                );
+              }
+            }
+            // Notify 1-on-1 student
+            if (s.student_id && s.session_type !== 'GROUP_COHORT') {
+              const u = await db.getAsync(`SELECT id FROM users WHERE id = ?`, [s.student_id]);
+              if (u) {
+                const nid = 'notif_live_' + s.id + '_' + s.student_id;
+                await db.runAsync(
+                  `INSERT OR IGNORE INTO notifications (id, user_id, title, message, time, is_unread, type, target_page, created_at)
+                   VALUES (?, ?, ?, ?, 'Just now', 1, 'calendar', 'view-sessions', CURRENT_TIMESTAMP)`,
+                  [nid, s.student_id, notifTitle, notifMsg]
+                );
+              }
+            }
+            // Notify cohort attendees
+            if (s.session_type === 'GROUP_COHORT') {
+              try {
+                const attendees = await db.allAsync(`SELECT student_id FROM session_attendees WHERE session_id = ?`, [s.id]);
+                for (const att of (attendees || [])) {
+                  const u = await db.getAsync(`SELECT id FROM users WHERE id = ?`, [att.student_id]);
+                  if (u) {
+                    const nid = 'notif_live_' + s.id + '_' + att.student_id;
+                    await db.runAsync(
+                      `INSERT OR IGNORE INTO notifications (id, user_id, title, message, time, is_unread, type, target_page, created_at)
+                       VALUES (?, ?, ?, ?, 'Just now', 1, 'calendar', 'view-sessions', CURRENT_TIMESTAMP)`,
+                      [nid, att.student_id, notifTitle, notifMsg]
+                    );
+                  }
+                }
+              } catch (e) {}
+            }
+          }
         }
       }
-      return expiredSessionIds;
+      return { activatedSessionIds, expiredSessionIds };
     } catch (err) {
-      console.warn('checkAndUpdateExpiredSessions error:', err.message);
-      return [];
+      console.warn('checkAndUpdateLiveAndExpiredSessions error:', err.message);
+      return { activatedSessionIds: [], expiredSessionIds: [] };
     }
+  },
+
+  async checkAndUpdateExpiredSessions() {
+    const res = await this.checkAndUpdateLiveAndExpiredSessions();
+    return res.expiredSessionIds;
   }
 };
 

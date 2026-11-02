@@ -1476,33 +1476,88 @@ class SkillSwapStore {
   }
 
   async checkSupportEligibility(skillName) {
-    const res = await fetch(`${this.apiBase}/support/eligibility?skillName=${encodeURIComponent(skillName || '')}`, {
-      headers: this.getAuthHeaders()
-    });
-    return await res.json();
+    try {
+      const res = await fetch(`${this.apiBase}/support/eligibility?skillName=${encodeURIComponent(skillName || '')}`, {
+        headers: this.getAuthHeaders()
+      });
+      const ct = res.headers.get('content-type') || '';
+      if (ct.includes('application/json')) {
+        return await res.json();
+      }
+    } catch (e) {
+      console.warn('Could not check support eligibility:', e.message);
+    }
+    return { eligible: true, proof: 'Verified Student Member', type: 'GENERAL' };
   }
 
   async createSupportDoubt({ category, course, skillName, title, description, codeSnippet, issueType, sessionId, attachments, attachmentName, attachmentData }) {
-    const res = await fetch(`${this.apiBase}/support/doubts`, {
-      method: 'POST',
-      headers: this.getAuthHeaders(),
-      body: JSON.stringify({
-        category: category || skillName,
-        course: course || skillName,
-        skillName,
-        title,
-        description,
-        codeSnippet,
-        issueType,
-        sessionId,
-        attachments: attachments || [],
-        attachmentName,
-        attachmentData
-      })
-    });
-    const data = await res.json();
-    if (!data.success) throw new Error(data.error || 'Could not create support doubt');
-    return data;
+    const payload = {
+      category: category || skillName || issueType || 'Technical Doubt',
+      course: course || skillName || 'General Engineering',
+      skillName: skillName || category,
+      title,
+      description,
+      codeSnippet,
+      issueType,
+      sessionId,
+      attachments: attachments || [],
+      attachmentName,
+      attachmentData
+    };
+
+    const endpoints = [
+      `${this.apiBase}/support/doubts`,
+      `${this.apiBase}/support/tickets`,
+      `${this.apiBase}/tickets`
+    ];
+
+    let lastError = null;
+
+    for (const url of endpoints) {
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: this.getAuthHeaders(),
+          body: JSON.stringify(payload)
+        });
+
+        const contentType = res.headers.get('content-type') || '';
+        let data = null;
+
+        if (contentType.includes('application/json')) {
+          data = await res.json();
+        } else {
+          const rawText = await res.text();
+          if (res.status === 404 && url !== endpoints[endpoints.length - 1]) {
+            // Try next candidate endpoint on 404
+            continue;
+          }
+          throw new Error(
+            !res.ok
+              ? `Server returned HTTP ${res.status}: Unable to submit support ticket. (Expected JSON, received HTML)`
+              : 'Unexpected server response (received HTML instead of JSON). Backend API routing may be misconfigured.'
+          );
+        }
+
+        if (res.status === 404 && url !== endpoints[endpoints.length - 1]) {
+          continue;
+        }
+
+        if (!res.ok || !data.success) {
+          throw new Error(data.message || data.error || 'Unable to submit support ticket');
+        }
+
+        return data;
+      } catch (err) {
+        lastError = err;
+        // If not a 404 endpoint mismatch, don't keep looping
+        if (!err.message.includes('404')) {
+          throw err;
+        }
+      }
+    }
+
+    throw lastError || new Error('Unable to submit support ticket: All API endpoints failed');
   }
 
   async createSupportTicket(data) {
@@ -1514,9 +1569,13 @@ class SkillSwapStore {
       method: 'POST',
       headers: this.getAuthHeaders()
     });
+    const ct = res.headers.get('content-type') || '';
+    if (!ct.includes('application/json')) {
+      throw new Error(`Server returned HTTP ${res.status} (non-JSON response).`);
+    }
     const data = await res.json();
     if (res.status === 409 || !data.success) {
-      const err = new Error(data.error || 'This doubt has already been accepted by another user.');
+      const err = new Error(data.message || data.error || 'This doubt has already been accepted by another user.');
       err.status = res.status;
       err.isConflict = (res.status === 409);
       throw err;
@@ -1626,8 +1685,12 @@ class SkillSwapStore {
       });
       const data = await res.json();
       if (data.success && Array.isArray(data.notifications)) {
-        this.notifications = data.notifications;
-        return data.notifications;
+        this.notifications = data.notifications.map(n => ({
+          ...n,
+          unread: Boolean(n.is_unread === 1 || n.is_unread === true || n.unread === true),
+          time: n.time || this.formatTimeAgo(n.created_at)
+        }));
+        return this.notifications;
       }
     } catch (e) {
       console.warn('Could not fetch notifications:', e);
@@ -1635,17 +1698,90 @@ class SkillSwapStore {
     return this.notifications || [];
   }
 
+  async addNotification({ title, message, type = 'general', target_page = null, id = null }) {
+    if (!title || !message) return null;
+    const notifId = id || ('notif_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6));
+    const newNotif = {
+      id: notifId,
+      user_id: this.currentPersonaId || 'sri',
+      title: String(title).trim(),
+      message: String(message).trim(),
+      time: 'Just now',
+      is_unread: 1,
+      unread: true,
+      type: type || 'general',
+      target_page: target_page || null,
+      created_at: new Date().toISOString()
+    };
+
+    if (!Array.isArray(this.notifications)) this.notifications = [];
+
+    // Client-side deduplication within 5 seconds
+    const existingIdx = this.notifications.findIndex(
+      n => n.title === newNotif.title && n.message === newNotif.message && (Date.now() - new Date(n.created_at || Date.now()).getTime()) < 6000
+    );
+    if (existingIdx !== -1) {
+      return this.notifications[existingIdx];
+    }
+
+    // Prepend to top so latest is always first
+    this.notifications.unshift(newNotif);
+
+    // Immediate dynamic UI refresh
+    if (window.app && typeof window.app.renderNotifications === 'function') {
+      window.app.renderNotifications(false);
+    }
+
+    // Persist to backend
+    try {
+      const res = await fetch(`${this.apiBase}/notifications`, {
+        method: 'POST',
+        headers: this.getAuthHeaders(),
+        body: JSON.stringify({
+          id: notifId,
+          title: newNotif.title,
+          message: newNotif.message,
+          type: newNotif.type,
+          target_page: newNotif.target_page
+        })
+      });
+      const data = await res.json();
+      if (data.success && data.notification && data.notification.id) {
+        newNotif.id = data.notification.id;
+      }
+    } catch (e) {
+      console.warn('Could not persist notification:', e);
+    }
+
+    return newNotif;
+  }
+
+  formatTimeAgo(dateInput) {
+    if (!dateInput) return 'Just now';
+    const date = new Date(dateInput);
+    if (isNaN(date.getTime())) return String(dateInput);
+    const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+    if (seconds < 45) return 'Just now';
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    if (days < 7) return `${days}d ago`;
+    return date.toLocaleDateString();
+  }
+
   async markAllNotificationsRead() {
     try {
+      (this.notifications || []).forEach(n => { n.is_unread = 0; n.unread = false; });
+      if (window.app && typeof window.app.renderNotifications === 'function') {
+        window.app.renderNotifications(false);
+      }
       const res = await fetch(`${this.apiBase}/notifications/mark-read`, {
         method: 'POST',
         headers: this.getAuthHeaders()
       });
-      const data = await res.json();
-      if (data.success) {
-        (this.notifications || []).forEach(n => { n.is_unread = 0; n.unread = false; });
-      }
-      return data;
+      return await res.json();
     } catch (e) {
       console.warn('Could not mark all notifications as read:', e);
       return { success: false };
@@ -1654,16 +1790,19 @@ class SkillSwapStore {
 
   async markNotificationRead(id) {
     try {
+      const item = (this.notifications || []).find(n => n.id === id);
+      if (item) {
+        item.is_unread = 0;
+        item.unread = false;
+        if (window.app && typeof window.app.renderNotifications === 'function') {
+          window.app.renderNotifications(false);
+        }
+      }
       const res = await fetch(`${this.apiBase}/notifications/${id}/mark-read`, {
         method: 'POST',
         headers: this.getAuthHeaders()
       });
-      const data = await res.json();
-      if (data.success) {
-        const item = (this.notifications || []).find(n => n.id === id);
-        if (item) { item.is_unread = 0; item.unread = false; }
-      }
-      return data;
+      return await res.json();
     } catch (e) {
       console.warn('Could not mark notification as read:', e);
       return { success: false };

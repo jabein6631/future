@@ -4,22 +4,20 @@
 
 const express = require('express');
 const router = express.Router();
-const { authenticateToken } = require('../middleware/auth');
+const { authenticateToken, optionalAuth } = require('../middleware/auth');
 const { trusodbService, supabaseService } = require('../database/trusodb');
 const { db } = require('../database/db');
 
-// All booking routes require authentication
-router.use(authenticateToken);
-
 /**
  * GET /api/booking/mentors
- * Returns list of mentors with level, rating, reviews, skills, availability, and credit rate
+ * Returns list of mentors from Turso DB with level, rating, reviews, skills, availability, and credit rate
  */
-router.get('/mentors', async (req, res, next) => {
+router.get('/mentors', optionalAuth, async (req, res, next) => {
   try {
     const search = req.query.search || '';
-    const excludeUserId = req.user?.id;
-    const mentors = await supabaseService.getBookingMentors({ search, excludeUserId });
+    const tier = req.query.tier || '';
+    const excludeUserId = req.user?.id || req.headers['x-user-id'] || req.query.excludeUserId;
+    const mentors = await trusodbService.getBookingMentors({ search, tier, excludeUserId });
     res.json({ success: true, mentors, count: mentors.length });
   } catch (err) {
     next(err);
@@ -30,9 +28,9 @@ router.get('/mentors', async (req, res, next) => {
  * GET /api/booking/subjects
  * Returns curated subjects list with category, icon, and dynamic topic tags
  */
-router.get('/subjects', async (req, res, next) => {
+router.get('/subjects', optionalAuth, async (req, res, next) => {
   try {
-    const subjects = await supabaseService.getBookingSubjects();
+    const subjects = await trusodbService.getBookingSubjects();
     res.json({ success: true, subjects, count: subjects.length });
   } catch (err) {
     next(err);
@@ -43,13 +41,13 @@ router.get('/subjects', async (req, res, next) => {
  * GET /api/booking/availability
  * Returns available time slots for a mentor on a specific date
  */
-router.get('/availability', async (req, res, next) => {
+router.get('/availability', optionalAuth, async (req, res, next) => {
   try {
     const { mentorId, date } = req.query;
     if (!mentorId) {
       return res.status(400).json({ success: false, error: 'mentorId is required' });
     }
-    const rawSlots = await supabaseService.getMentorAvailableSlots({ mentorId, date });
+    const rawSlots = await trusodbService.getMentorAvailableSlots({ mentorId, date });
     const slotList = (rawSlots || []).map(s => (typeof s === 'string' ? s : s.time));
     const availableSlots = (rawSlots || []).filter(s => typeof s === 'string' || s.isAvailable).map(s => (typeof s === 'string' ? s : s.time));
     const bookedSlots = (rawSlots || []).filter(s => typeof s === 'object' && !s.isAvailable).map(s => s.time);

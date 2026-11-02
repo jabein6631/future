@@ -35,4 +35,9 @@ router.post('/tickets/:id/claim', supportController.claimTicket);
 router.post('/tickets/:id/resolve', supportController.resolveTicket);
 router.post('/tickets/:id/rate', supportController.rateTicket);
 
+// Direct root endpoints (when mounted at /tickets or /doubts)
+router.get('/', supportController.getAllDoubts);
+router.post('/', supportController.createDoubt);
+router.get('/:id', supportController.getDoubtById);
+
 module.exports = router;

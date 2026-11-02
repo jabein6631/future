@@ -46,6 +46,10 @@ db.runAsync = function (sql, params = []) {
       lastID: res.lastInsertRowid !== undefined ? Number(res.lastInsertRowid) : undefined,
       changes: res.rowsAffected
     })).catch((err) => {
+      // Safe no-op for idempotent migrations
+      if (err.message && err.message.includes('duplicate column name')) {
+        return { lastID: undefined, changes: 0 };
+      }
       console.error('⚠️ [Turso Query Error in runAsync]:', err.message);
       throw err;
     });
@@ -276,6 +280,11 @@ async function initSchema() {
       halfway_paid_at DATETIME,
       cancellation_reason TEXT,
       cancelled_by TEXT,
+      cancelled_at DATETIME,
+      accepted_by_user_id TEXT,
+      accepted_at DATETIME,
+      declined_by_user_id TEXT,
+      declined_at DATETIME,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (teacher_id) REFERENCES users(id)
@@ -389,10 +398,16 @@ async function initSchema() {
       time TEXT NOT NULL,
       is_unread INTEGER DEFAULT 1,
       type TEXT NOT NULL DEFAULT 'match',
+      target_page TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id)
     )
   `);
+  try {
+    await db.runAsync(`ALTER TABLE notifications ADD COLUMN target_page TEXT`);
+  } catch (err) {
+    // Column already exists
+  }
 
   // 16. Code Lab Problems Table
   await db.runAsync(`
@@ -564,6 +579,12 @@ async function initSchema() {
       certificate_id TEXT NOT NULL,
       verified_by TEXT NOT NULL,
       status TEXT NOT NULL,
+      user_id TEXT,
+      credential_id TEXT,
+      skill_name TEXT,
+      result TEXT,
+      confidence REAL,
+      ai_report_json TEXT,
       verified_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
@@ -610,6 +631,28 @@ async function initSchema() {
       signal_data TEXT NOT NULL,
       created_at_ms INTEGER NOT NULL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // 28. Password Reset OTP Verification Table on Turso
+  await db.runAsync(`
+    CREATE TABLE IF NOT EXISTS password_reset_otps (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      email TEXT NOT NULL,
+      otp_hash TEXT NOT NULL,
+      reset_token TEXT,
+      expires_at INTEGER NOT NULL,
+      token_expires_at INTEGER,
+      attempts INTEGER DEFAULT 0,
+      is_verified INTEGER DEFAULT 0,
+      is_used INTEGER DEFAULT 0,
+      ip_address TEXT,
+      user_agent TEXT,
+      verified_at DATETIME,
+      used_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id)
     )
   `);
 
@@ -672,6 +715,11 @@ async function initSchema() {
     `ALTER TABLE sessions ADD COLUMN halfway_paid_at DATETIME`,
     `ALTER TABLE sessions ADD COLUMN cancellation_reason TEXT`,
     `ALTER TABLE sessions ADD COLUMN cancelled_by TEXT`,
+    `ALTER TABLE sessions ADD COLUMN cancelled_at DATETIME`,
+    `ALTER TABLE sessions ADD COLUMN accepted_by_user_id TEXT`,
+    `ALTER TABLE sessions ADD COLUMN accepted_at DATETIME`,
+    `ALTER TABLE sessions ADD COLUMN declined_by_user_id TEXT`,
+    `ALTER TABLE sessions ADD COLUMN declined_at DATETIME`,
     `ALTER TABLE sessions ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP`,
     `ALTER TABLE sessions ADD COLUMN payment_released_at DATETIME`,
     `ALTER TABLE sessions ADD COLUMN attendance_status TEXT`,
@@ -722,6 +770,7 @@ async function initSchema() {
     // support_doubts
     `ALTER TABLE support_doubts ADD COLUMN attachment_name TEXT`,
     `ALTER TABLE support_doubts ADD COLUMN attachment_data TEXT`,
+    `ALTER TABLE support_doubts ADD COLUMN reward_granted INTEGER DEFAULT 0`,
     `ALTER TABLE support_doubts ADD COLUMN resolved_at DATETIME`,
     `ALTER TABLE support_doubts ADD COLUMN rating INTEGER`,
     `ALTER TABLE support_doubts ADD COLUMN feedback TEXT`,
@@ -729,13 +778,23 @@ async function initSchema() {
     // support_answers
     `ALTER TABLE support_answers ADD COLUMN attachment_name TEXT`,
     `ALTER TABLE support_answers ADD COLUMN attachment_data TEXT`,
+    `ALTER TABLE support_answer_attachments ADD COLUMN doubt_id TEXT`,
 
     // support_tickets
     `ALTER TABLE support_tickets ADD COLUMN attachment_name TEXT`,
     `ALTER TABLE support_tickets ADD COLUMN attachment_data TEXT`,
+    `ALTER TABLE support_tickets ADD COLUMN reward_granted INTEGER DEFAULT 0`,
     `ALTER TABLE support_tickets ADD COLUMN resolved_at DATETIME`,
     `ALTER TABLE support_tickets ADD COLUMN rating INTEGER`,
     `ALTER TABLE support_tickets ADD COLUMN feedback TEXT`,
+
+    // certificate_verifications
+    `ALTER TABLE certificate_verifications ADD COLUMN user_id TEXT`,
+    `ALTER TABLE certificate_verifications ADD COLUMN credential_id TEXT`,
+    `ALTER TABLE certificate_verifications ADD COLUMN skill_name TEXT`,
+    `ALTER TABLE certificate_verifications ADD COLUMN result TEXT`,
+    `ALTER TABLE certificate_verifications ADD COLUMN confidence REAL`,
+    `ALTER TABLE certificate_verifications ADD COLUMN ai_report_json TEXT`,
 
     // messages
     `ALTER TABLE messages ADD COLUMN is_read INTEGER DEFAULT 0`,

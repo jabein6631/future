@@ -37,14 +37,20 @@ app.use('/api', errorHandler);
 app.use(errorHandler);
 
 app.all('*', (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
   if (routeLoadError) {
     return res.status(500).json({
       success: false,
+      message: 'Unable to process API request: Backend API routes failed to initialize',
       error: 'Backend API routes failed to initialize: ' + routeLoadError.message,
       stack: routeLoadError.stack
     });
   }
-  res.status(404).json({ success: false, error: 'API route not found: ' + req.originalUrl });
+  res.status(404).json({
+    success: false,
+    message: 'API route not found',
+    error: 'API route not found: ' + req.originalUrl
+  });
 });
 
 

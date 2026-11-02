@@ -63,6 +63,7 @@ async function authenticateToken(req, res, next) {
   if (!token) {
     return res.status(401).json({
       success: false,
+      message: 'Authentication required. Please sign in to access support tickets.',
       error: 'Authentication required. Please provide a valid Bearer token in the Authorization header.'
     });
   }
@@ -118,9 +119,20 @@ async function optionalAuth(req, res, next) {
     }
   }
 
-  // Fallback demo user context if none attached
-  if (!req.currentUserId) {
-    req.currentUserId = req.headers['x-user-id'] || 'sri';
+  if (!req.user && req.headers['x-user-id']) {
+    try {
+      const user = await db.getAsync(`SELECT * FROM users WHERE id = ?`, [req.headers['x-user-id']]);
+      if (user) {
+        user.badges = typeof user.badges_json === 'string' ? JSON.parse(user.badges_json || '[]') : (user.badges_json || []);
+        delete user.password_hash;
+        req.user = user;
+        req.currentUserId = user.id;
+      }
+    } catch (e) { }
+  }
+
+  if (!req.currentUserId && req.user) {
+    req.currentUserId = req.user.id;
   }
   next();
 }

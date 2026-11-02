@@ -14,11 +14,11 @@ export default function App() {
     setMounted(true);
 
     const scriptUrls = [
-      '/js/data.js?v=3.5',
-      '/js/wallet.js?v=3.5',
-      '/js/conference.js?v=3.5',
-      '/js/codelab.js?v=3.5',
-      '/js/app.js?v=3.5'
+      '/js/data.js?v=4.2',
+      '/js/wallet.js?v=4.2',
+      '/js/conference.js?v=4.2',
+      '/js/codelab.js?v=4.2',
+      '/js/app.js?v=4.2'
     ];
 
     // Sequential script loader to guarantee dependency resolution order

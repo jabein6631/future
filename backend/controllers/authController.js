@@ -10,10 +10,6 @@ const { trusodbService, supabaseService } = require('../database/trusodb');
 const { generateToken, ROLES } = require('../middleware/auth');
 const emailService = require('../services/emailService');
 
-// Dynamic in-memory store for 6-digit OTP verification codes
-// Key: normalized email, Value: { otp, userId, email, expiresAt, attempts }
-const resetOtpStore = new Map();
-
 function getClientMeta(req) {
   const forwarded = req.headers['x-forwarded-for'];
   const ip = forwarded ? forwarded.split(',')[0].trim() : (req.socket?.remoteAddress || req.ip || '127.0.0.1');
@@ -330,8 +326,8 @@ const authController = {
    */
   async forgotPassword(req, res, next) {
     try {
-      const { email, emailOrId } = req.body;
-      const identifier = (email || emailOrId || '').trim();
+      const { email, emailOrId, userId } = req.body;
+      const identifier = (email || emailOrId || userId || '').trim();
       const clientMeta = getClientMeta(req);
 
       if (!identifier) {
@@ -341,56 +337,47 @@ const authController = {
         });
       }
 
-      // Check user existence in database
+      // Check user existence in Turso database (case-insensitive email or ID)
       const user = await db.getAsync(
-        `SELECT * FROM users WHERE LOWER(email) = ? OR id = ?`,
+        `SELECT id, name, email, role FROM users WHERE LOWER(email) = ? OR id = ?`,
         [identifier.toLowerCase(), identifier]
       );
 
-      // If user does not exist, return a generic message to prevent account enumeration
+      // If user does not exist, return generic message to prevent account enumeration
       if (!user) {
         return res.json({
           success: true,
-          message: 'If an account exists for this email, a verification code has been sent.'
+          message: 'If an account exists for this email or ID, a verification code has been sent.'
         });
       }
 
-      // Deduplication & Anti-Spam: If an OTP was already generated and dispatched to this email within the last 15 seconds, don't generate a second duplicate OTP
-      const existingRecord = resetOtpStore.get(user.email.toLowerCase());
-      if (existingRecord && existingRecord.lastSentAt && (Date.now() - existingRecord.lastSentAt < 15 * 1000)) {
-        console.log(`ℹ️ [SkillSwap OTP Deduplicated] Active code already dispatched to ${user.email} ${Math.round((Date.now() - existingRecord.lastSentAt)/1000)}s ago. Reusing active verification window.`);
-        return res.json({
-          success: true,
-          message: 'If an account exists for this email, a verification code has been sent.',
-          email: user.email
-        });
-      }
+      // Invalidate any previously active OTP requests for this user in Turso
+      await db.runAsync(
+        `UPDATE password_reset_otps SET is_used = 1 WHERE user_id = ? AND is_used = 0`,
+        [user.id]
+      );
 
-      // Generate a cryptographically secure, random 6-digit OTP
+      // Generate secure 6-digit OTP
       const otp = crypto.randomInt(100000, 1000000).toString();
       const otpHash = crypto.createHash('sha256').update(otp).digest('hex');
       const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes lifespan
+      const otpId = 'otp_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex');
 
-      // Store hashed OTP and rate-limiting metadata (invalidates any previous OTP)
-      resetOtpStore.set(user.email.toLowerCase(), {
-        otpHash,
-        userId: user.id,
-        email: user.email,
-        expiresAt,
-        attempts: 0,
-        lastSentAt: Date.now(),
-        verified: false,
-        resetToken: null,
-        resetTokenExpiresAt: null
-      });
+      // Save OTP verification request into Turso database
+      await db.runAsync(
+        `INSERT INTO password_reset_otps (id, user_id, email, otp_hash, expires_at, attempts, is_verified, is_used, ip_address, user_agent)
+         VALUES (?, ?, ?, ?, ?, 0, 0, 0, ?, ?)`,
+        [otpId, user.id, user.email, otpHash, expiresAt, clientMeta.ip, clientMeta.userAgent]
+      );
 
       console.log(`\n========================================================`);
-      console.log(`🔐 [SkillSwap Secure Password Reset Requested]`);
-      console.log(`👤 Student: ${user.name} (${user.email})`);
+      console.log(`🔐 [SkillSwap Password Reset OTP Stored in Turso]`);
+      console.log(`🆔 Request ID: ${otpId}`);
+      console.log(`👤 User: ${user.name} (${user.id} - ${user.email})`);
       console.log(`⏱️ Expiration: 10 minutes (${new Date(expiresAt).toLocaleTimeString()})`);
       console.log(`========================================================\n`);
 
-      // Dispatch real email via SMTP / Nodemailer (never throws unhandled error)
+      // Dispatch real email via SMTP / Nodemailer
       await emailService.sendPasswordResetOtp(user.email, user.name, otp);
 
       await recordLoginAudit({
@@ -400,15 +387,16 @@ const authController = {
         ipAddress: clientMeta.ip,
         userAgent: clientMeta.userAgent,
         status: 'SUCCESS',
-        failureReason: 'Dynamic OTP generated and dispatched to email',
+        failureReason: 'Dynamic OTP generated and saved to Turso',
         authMethod: 'FORGOT_PASSWORD_OTP'
       });
 
-      // Show ONLY a generic success message; NEVER send the OTP to frontend
       return res.json({
         success: true,
-        message: 'If an account exists for this email, a verification code has been sent.',
-        email: user.email
+        message: 'If an account exists for this email or ID, a verification code has been sent.',
+        email: user.email,
+        userId: user.id,
+        requestId: otpId
       });
     } catch (err) {
       next(err);
@@ -418,77 +406,122 @@ const authController = {
   /**
    * Verify Reset OTP
    * POST /api/auth/verify-reset-otp
-   * Validates OTP against stored SHA-256 hash, rate-limits attempts, and issues short-lived resetToken
+   * Validates OTP against stored SHA-256 hash in Turso, rate-limits attempts, and issues short-lived resetToken
    */
   async verifyResetOtp(req, res, next) {
     try {
-      const { email, otp } = req.body;
+      const { email, emailOrId, userId, otp, requestId } = req.body;
+      const cleanEmail = (email || emailOrId || '').trim().toLowerCase();
+      const cleanUserId = (userId || '').trim();
+      const cleanReqId = (requestId || '').trim();
       const clientMeta = getClientMeta(req);
 
-      if (!email || !otp) {
+      if ((!cleanEmail && !cleanUserId && !cleanReqId) || !otp) {
         return res.status(400).json({
           success: false,
-          error: 'Please provide both your email and the 6-digit verification code.'
+          error: 'Please provide both your email/User ID and the 6-digit verification code.'
         });
       }
 
-      const normalizedEmail = email.trim().toLowerCase();
-      const record = resetOtpStore.get(normalizedEmail);
+      let record = null;
 
-      if (!record || !record.otpHash) {
+      // 1. If requestId is passed, attempt direct lookup by ID
+      if (cleanReqId) {
+        record = await db.getAsync(
+          `SELECT * FROM password_reset_otps WHERE id = ? AND is_used = 0 LIMIT 1`,
+          [cleanReqId]
+        );
+      }
+
+      // 2. Lookup by user_id or email in Turso database
+      if (!record) {
+        record = await db.getAsync(
+          `SELECT * FROM password_reset_otps 
+           WHERE (user_id = ? OR LOWER(email) = ? OR user_id = ? OR LOWER(email) = ?) AND is_used = 0 
+           ORDER BY created_at DESC LIMIT 1`,
+          [cleanUserId || cleanEmail, cleanEmail || cleanUserId, cleanEmail, cleanUserId]
+        );
+      }
+
+      // 3. Fallback: Lookup registered user first to obtain canonical user_id and email
+      if (!record && (cleanEmail || cleanUserId)) {
+        const u = await db.getAsync(
+          `SELECT id, email FROM users WHERE LOWER(email) = ? OR id = ?`,
+          [cleanEmail, cleanUserId || cleanEmail]
+        );
+        if (u) {
+          record = await db.getAsync(
+            `SELECT * FROM password_reset_otps 
+             WHERE (user_id = ? OR LOWER(email) = ?) AND is_used = 0 
+             ORDER BY created_at DESC LIMIT 1`,
+            [u.id, u.email.toLowerCase()]
+          );
+        }
+      }
+
+      if (!record || !record.otp_hash) {
         return res.status(400).json({
           success: false,
           error: 'No active verification request found for this email. Please request a new code.'
         });
       }
 
-      if (Date.now() > record.expiresAt) {
-        resetOtpStore.delete(normalizedEmail);
+      // Check whether the OTP has expired (10 min limit)
+      if (Date.now() > Number(record.expires_at)) {
+        await db.runAsync(`UPDATE password_reset_otps SET is_used = 1 WHERE id = ?`, [record.id]);
         return res.status(400).json({
           success: false,
           error: 'The verification code has expired (10 min limit). Please request a new code.'
         });
       }
 
-      record.attempts = (record.attempts || 0) + 1;
-      if (record.attempts > 5) {
-        resetOtpStore.delete(normalizedEmail);
+      // Rate-limiting invalid attempts (max 5)
+      const currentAttempts = (record.attempts || 0) + 1;
+      if (currentAttempts > 5) {
+        await db.runAsync(`UPDATE password_reset_otps SET is_used = 1 WHERE id = ?`, [record.id]);
         return res.status(429).json({
           success: false,
           error: 'Too many invalid attempts. For your security, this code has been invalidated. Please request a new code.'
         });
       }
 
-      // Hash entered OTP and compare with stored hash
-      const incomingHash = crypto.createHash('sha256').update(otp.trim()).digest('hex');
-      if (incomingHash !== record.otpHash) {
+      // Hash entered OTP and compare securely with stored hash
+      const incomingHash = crypto.createHash('sha256').update(String(otp).trim()).digest('hex');
+      if (incomingHash !== record.otp_hash) {
+        await db.runAsync(`UPDATE password_reset_otps SET attempts = ? WHERE id = ?`, [currentAttempts, record.id]);
         return res.status(400).json({
           success: false,
-          error: `Incorrect verification code. Please check your email and try again. (${5 - record.attempts} attempts remaining)`
+          error: `Incorrect verification code. Please check your email and try again. (${5 - currentAttempts} attempts remaining)`
         });
       }
 
-      // OTP verified successfully: generate secure single-use resetToken and burn the OTP
+      // OTP verified successfully: issue 15-minute single-use resetToken and mark verified in Turso
       const resetToken = crypto.randomBytes(32).toString('hex');
-      record.verified = true;
-      record.resetToken = resetToken;
-      record.resetTokenExpiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
-      record.otpHash = null; // Invalidate OTP so it cannot be reused
+      const tokenExpiresAt = Date.now() + 15 * 60 * 1000;
+
+      await db.runAsync(
+        `UPDATE password_reset_otps 
+         SET is_verified = 1, reset_token = ?, token_expires_at = ?, verified_at = CURRENT_TIMESTAMP 
+         WHERE id = ?`,
+        [resetToken, tokenExpiresAt, record.id]
+      );
 
       await recordLoginAudit({
-        userId: record.userId,
-        email: normalizedEmail,
+        userId: record.user_id,
+        email: record.email,
         ipAddress: clientMeta.ip,
         userAgent: clientMeta.userAgent,
         status: 'SUCCESS',
-        failureReason: 'OTP verified successfully',
+        failureReason: 'OTP verified successfully in Turso',
         authMethod: 'VERIFY_RESET_OTP'
       });
 
       return res.json({
         success: true,
         message: 'OTP verified successfully. Please enter your new password.',
-        resetToken
+        resetToken,
+        email: record.email,
+        userId: record.user_id
       });
     } catch (err) {
       next(err);
@@ -501,54 +534,69 @@ const authController = {
    */
   async resendResetOtp(req, res, next) {
     try {
-      const { email } = req.body;
-      if (!email || typeof email !== 'string') {
+      const { email, emailOrId, userId } = req.body;
+      const identifier = (email || emailOrId || userId || '').trim();
+      const clientMeta = getClientMeta(req);
+
+      if (!identifier) {
         return res.status(400).json({
           success: false,
-          error: 'Please provide your registered email address.'
+          error: 'Please provide your registered email address or User ID.'
         });
       }
 
-      const normalizedEmail = email.trim().toLowerCase();
-      const record = resetOtpStore.get(normalizedEmail);
+      const user = await db.getAsync(
+        `SELECT id, name, email, role FROM users WHERE LOWER(email) = ? OR id = ?`,
+        [identifier.toLowerCase(), identifier]
+      );
 
-      // Enforce 30-second cooldown between resend requests
-      if (record && record.lastSentAt && (Date.now() - record.lastSentAt < 30 * 1000)) {
-        const secondsRemaining = Math.ceil((30 * 1000 - (Date.now() - record.lastSentAt)) / 1000);
-        return res.status(429).json({
-          success: false,
-          error: `Please wait ${secondsRemaining} seconds before requesting a new code.`
-        });
-      }
-
-      const user = await db.getAsync(`SELECT * FROM users WHERE LOWER(email) = ? OR id = ?`, [normalizedEmail, normalizedEmail]);
       if (!user) {
         return res.json({
           success: true,
-          message: 'If an account exists for this email, a verification code has been sent.'
+          message: 'If an account exists for this email or ID, a verification code has been sent.'
         });
       }
 
-      // Generate brand-new OTP & hash (invalidates previous OTP)
+      // Enforce 30-second cooldown between resend requests from Turso
+      const latestOtp = await db.getAsync(
+        `SELECT created_at, expires_at FROM password_reset_otps 
+         WHERE user_id = ? 
+         ORDER BY created_at DESC LIMIT 1`,
+        [user.id]
+      );
+
+      if (latestOtp && latestOtp.expires_at) {
+        const timeSinceCreation = Date.now() - (Number(latestOtp.expires_at) - 10 * 60 * 1000);
+        if (timeSinceCreation < 30 * 1000) {
+          const secondsRemaining = Math.ceil((30 * 1000 - timeSinceCreation) / 1000);
+          return res.status(429).json({
+            success: false,
+            error: `Please wait ${secondsRemaining} seconds before requesting a new code.`
+          });
+        }
+      }
+
+      // Invalidate previous active OTPs for this user in Turso
+      await db.runAsync(
+        `UPDATE password_reset_otps SET is_used = 1 WHERE user_id = ? AND is_used = 0`,
+        [user.id]
+      );
+
+      // Generate brand-new OTP & hash
       const otp = crypto.randomInt(100000, 1000000).toString();
       const otpHash = crypto.createHash('sha256').update(otp).digest('hex');
       const expiresAt = Date.now() + 10 * 60 * 1000;
+      const otpId = 'otp_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex');
 
-      resetOtpStore.set(user.email.toLowerCase(), {
-        otpHash,
-        userId: user.id,
-        email: user.email,
-        expiresAt,
-        attempts: 0,
-        lastSentAt: Date.now(),
-        verified: false,
-        resetToken: null,
-        resetTokenExpiresAt: null
-      });
+      await db.runAsync(
+        `INSERT INTO password_reset_otps (id, user_id, email, otp_hash, expires_at, attempts, is_verified, is_used, ip_address, user_agent)
+         VALUES (?, ?, ?, ?, ?, 0, 0, 0, ?, ?)`,
+        [otpId, user.id, user.email, otpHash, expiresAt, clientMeta.ip, clientMeta.userAgent]
+      );
 
       console.log(`\n========================================================`);
-      console.log(`🔁 [SkillSwap Resend OTP Requested]`);
-      console.log(`👤 Student: ${user.name} (${user.email})`);
+      console.log(`🔁 [SkillSwap Resend OTP Saved to Turso]`);
+      console.log(`👤 User: ${user.name} (${user.id} - ${user.email})`);
       console.log(`⏱️ Expiration: 10 minutes (${new Date(expiresAt).toLocaleTimeString()})`);
       console.log(`========================================================\n`);
 
@@ -556,27 +604,25 @@ const authController = {
 
       return res.json({
         success: true,
-        message: 'A fresh verification code has been sent to your email.'
+        message: 'A fresh verification code has been sent to your email.',
+        email: user.email,
+        userId: user.id,
+        requestId: otpId
       });
     } catch (err) {
       next(err);
     }
   },
-
-  /**
-   * Reset Password with Verified Reset Token
-   * POST /api/auth/reset-password
-   * Enforces capital letter + min 6 chars rules, matching confirmation, hashes with bcrypt, updates DB, and burns session
-   */
   async resetPassword(req, res, next) {
     try {
-      const { email, resetToken, newPassword, confirmPassword } = req.body;
+      const { email, emailOrId, userId, resetToken, newPassword, confirmPassword } = req.body;
+      const identifier = (email || emailOrId || userId || '').trim();
       const clientMeta = getClientMeta(req);
 
-      if (!email || !resetToken || !newPassword || !confirmPassword) {
+      if (!identifier || !resetToken || !newPassword || !confirmPassword) {
         return res.status(400).json({
           success: false,
-          error: 'Please provide email, verification token, new password, and confirmation.'
+          error: 'Please provide email/User ID, verification token, new password, and confirmation.'
         });
       }
 
@@ -587,22 +633,29 @@ const authController = {
         });
       }
 
-      const normalizedEmail = email.trim().toLowerCase();
-      const record = resetOtpStore.get(normalizedEmail);
+      // Retrieve active verified session from Turso
+      const record = await db.getAsync(
+        `SELECT * FROM password_reset_otps 
+         WHERE (LOWER(email) = ? OR user_id = ?) 
+           AND reset_token = ? 
+           AND is_verified = 1 
+           AND is_used = 0 
+         LIMIT 1`,
+        [identifier.toLowerCase(), identifier, resetToken]
+      );
 
-      // Verify that OTP verification succeeded and token is valid
-      if (!record || !record.verified || !record.resetToken || record.resetToken !== resetToken) {
+      if (!record) {
         return res.status(400).json({
           success: false,
           error: 'Invalid or expired password reset session. Please verify your OTP again.'
         });
       }
 
-      if (Date.now() > record.resetTokenExpiresAt) {
-        resetOtpStore.delete(normalizedEmail);
+      if (Date.now() > Number(record.token_expires_at)) {
+        await db.runAsync(`UPDATE password_reset_otps SET is_used = 1 WHERE id = ?`, [record.id]);
         return res.status(400).json({
           success: false,
-          error: 'Password reset session expired (10 min limit). Please verify your OTP again.'
+          error: 'Password reset session expired (15 min limit). Please verify your OTP again.'
         });
       }
 
@@ -623,24 +676,27 @@ const authController = {
 
       const passwordHash = await bcrypt.hash(newPassword, 10);
 
-      // Update existing user in the database (never store plaintext passwords)
+      // Update existing user in the Turso database
       await db.runAsync(
-        `UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? OR LOWER(email) = ?`,
-        [passwordHash, record.userId, normalizedEmail]
+        `UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+        [passwordHash, record.user_id]
       );
 
-      // Invalidate and delete reset session (prevent reuse of OTP or resetToken)
-      resetOtpStore.delete(normalizedEmail);
+      // Invalidate all reset requests and tokens for this user in Turso
+      await db.runAsync(
+        `UPDATE password_reset_otps SET is_used = 1, used_at = CURRENT_TIMESTAMP WHERE user_id = ?`,
+        [record.user_id]
+      );
 
-      console.log(`✅ [Password Reset Success] Database password updated securely for ${normalizedEmail}`);
+      console.log(`✅ [Password Reset Success] Password updated in Turso for user ${record.user_id} (${record.email})`);
 
       await recordLoginAudit({
-        userId: record.userId,
-        email: normalizedEmail,
+        userId: record.user_id,
+        email: record.email,
         ipAddress: clientMeta.ip,
         userAgent: clientMeta.userAgent,
         status: 'SUCCESS',
-        failureReason: 'Password reset successful',
+        failureReason: 'Password reset successful via Turso OTP',
         authMethod: 'PASSWORD_RESET'
       });
 

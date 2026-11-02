@@ -112,6 +112,15 @@ app.use((req, res, next) => {
 // Mount Modular API Routes
 app.use('/api', apiRoutes);
 
+// Catch-all for undefined API routes (ALWAYS return JSON, NEVER HTML)
+app.all('/api/*', (req, res) => {
+  res.status(404).json({
+    success: false,
+    message: `API endpoint not found: ${req.method} ${req.originalUrl}`,
+    error: `API endpoint not found: ${req.method} ${req.originalUrl}`
+  });
+});
+
 // Catch-All Route for Single Page Application
 app.get('*', (req, res, next) => {
   if (req.originalUrl.startsWith('/api') || req.originalUrl.startsWith('/webrtc-signaling') || req.originalUrl.startsWith('/uploads')) {
@@ -441,12 +450,35 @@ async function startServer() {
       console.log(`========================================================\n`);
     });
 
-    // Periodic Background Worker: Automatically end expired sessions & broadcast session-ended event
+    // Periodic Background Worker: Automatically activate scheduled sessions when start time arrives,
+    // and automatically complete expired sessions when duration ends
     setInterval(async () => {
       try {
-        const expiredIds = await trusodbService.checkAndUpdateExpiredSessions();
-        if (expiredIds && expiredIds.length > 0) {
-          for (const sessionId of expiredIds) {
+        const { activatedSessionIds, expiredSessionIds } = await trusodbService.checkAndUpdateLiveAndExpiredSessions();
+
+        // Broadcast session-started when sessions transition to LIVE
+        if (activatedSessionIds && activatedSessionIds.length > 0) {
+          for (const sessionId of activatedSessionIds) {
+            console.log(`🚀 [Server Auto-Activation] Session ${sessionId} scheduled start time arrived. Session is now LIVE!`);
+            const broadcastMsg = JSON.stringify({
+              type: 'session-started',
+              sessionId,
+              status: 'Live',
+              message: 'Scheduled session is now LIVE. Classroom is open!'
+            });
+            rooms.forEach((room) => {
+              room.forEach((info) => {
+                if (info.ws && info.ws.readyState === 1) {
+                  info.ws.send(broadcastMsg);
+                }
+              });
+            });
+          }
+        }
+
+        // Broadcast session-ended when sessions expire
+        if (expiredSessionIds && expiredSessionIds.length > 0) {
+          for (const sessionId of expiredSessionIds) {
             const roomId = `skillswap_meet_${sessionId}`;
             console.log(`⏰ [Server Expiry Monitor] Session ${sessionId} scheduled duration expired. Broadcasting session-ended.`);
             if (rooms.has(roomId)) {
@@ -467,7 +499,7 @@ async function startServer() {
       } catch (err) {
         // Silently ignore ticker errors
       }
-    }, 10000);
+    }, 5000);
 
   } catch (err) {
     console.error('❌ Failed to start SkillSwap server:', err);

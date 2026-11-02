@@ -523,7 +523,8 @@ const supportController = {
       if (!title || !description) {
         return res.status(400).json({
           success: false,
-          error: 'Please provide a title and detailed description for your doubt.'
+          message: 'Unable to submit support ticket: Please provide a title and description.',
+          error: 'Please provide a title and detailed description for your support ticket.'
         });
       }
 
@@ -635,7 +636,7 @@ const supportController = {
 
       res.status(201).json({
         success: true,
-        message: 'Doubt successfully submitted to the common Support Team queue! (Cost: 0 Credits)',
+        message: 'Support ticket submitted successfully',
         doubt: fullDoubt,
         ticket: fullDoubt
       });
