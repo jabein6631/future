@@ -121,21 +121,23 @@
               <i class="fa-solid fa-lock portal-input-icon"></i>
               <input type="password" id="portalLoginPassword" class="portal-form-control"
                 placeholder="Enter password (starts with Capital Letter)" required>
+                <button type="button" class="portal-password-toggle-btn" id="portalLoginPasswordToggle" tabindex="-1" aria-label="Toggle password visibility">
+                  <i class="fa-regular fa-eye"></i>
+                </button>
             </div>
             <div class="portal-forgot-wrapper">
               <a href="javascript:void(0)" id="portalForgotPasswordLink" class="portal-forgot-link" onclick="window.showForgotPanel &amp;&amp; window.showForgotPanel(); return false;">Forgot Password?</a>
             </div>
             <span class="portal-field-hint">
-              <i class="fa-solid fa-shield-check"></i> Starts with Capital Letter (A-Z) • Min 6 characters
+                Starts with Capital Letter (A-Z) • Min 6 characters
             </span>
           </div>
 
           <div id="portalLoginErrorMsg" class="portal-feedback-error" style="display: none;"></div>
 
           <button type="submit" class="portal-btn-primary" id="portalSubmitSignInBtn">
-            <span>Sign In to Dashboard</span>
-            <i class="fa-solid fa-arrow-right"></i>
-          </button>
+              <span>Sign In to Dashboard &rarr;</span>
+            </button>
         </form>
 
         <!-- SIGN UP (REGISTER) FORM -->
@@ -163,6 +165,9 @@
                 <i class="fa-solid fa-lock portal-input-icon"></i>
                 <input type="password" id="portalRegPassword" class="portal-form-control" placeholder="e.g. Password123"
                   minlength="6" required>
+                  <button type="button" class="portal-password-toggle-btn" id="portalRegPasswordToggle" tabindex="-1" aria-label="Toggle password visibility">
+                    <i class="fa-regular fa-eye"></i>
+                  </button>
               </div>
             </div>
           </div>
@@ -287,9 +292,12 @@
                 <i class="fa-solid fa-lock portal-input-icon"></i>
                 <input type="password" id="portalNewPassword" class="portal-form-control"
                   placeholder="Enter new password (starts with Capital Letter)" required>
+                  <button type="button" class="portal-password-toggle-btn" id="portalNewPasswordToggle" tabindex="-1" aria-label="Toggle password visibility">
+                    <i class="fa-regular fa-eye"></i>
+                  </button>
               </div>
               <span class="portal-field-hint">
-                <i class="fa-solid fa-shield-check"></i> Starts with Capital Letter (A-Z) • Min 6 characters
+                Starts with Capital Letter (A-Z) • Min 6 characters
               </span>
             </div>
 
@@ -299,6 +307,9 @@
                 <i class="fa-solid fa-lock portal-input-icon"></i>
                 <input type="password" id="portalConfirmPassword" class="portal-form-control"
                   placeholder="Re-enter new password" required>
+                  <button type="button" class="portal-password-toggle-btn" id="portalConfirmPasswordToggle" tabindex="-1" aria-label="Toggle password visibility">
+                    <i class="fa-regular fa-eye"></i>
+                  </button>
               </div>
             </div>
 

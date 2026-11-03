@@ -862,6 +862,44 @@ async function initSchema() {
       // Ignore if column already exists or table was freshly created
     }
   }
+
+  // Optimal indexes for instant O(log N) Turso Cloud lookups
+  const optimalIndexes = [
+    'CREATE INDEX IF NOT EXISTS idx_sessions_teacher ON sessions(teacher_id)',
+    'CREATE INDEX IF NOT EXISTS idx_sessions_student ON sessions(student_id)',
+    'CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status)',
+    'CREATE INDEX IF NOT EXISTS idx_sessions_date ON sessions(date)',
+    'CREATE INDEX IF NOT EXISTS idx_session_attendees_sess ON session_attendees(session_id)',
+    'CREATE INDEX IF NOT EXISTS idx_session_attendees_stud ON session_attendees(student_id)',
+    'CREATE INDEX IF NOT EXISTS idx_messages_recv_status ON messages(receiver_id, status)',
+    'CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id)',
+    'CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_notif_user_unread ON notifications(user_id, is_unread)',
+    'CREATE INDEX IF NOT EXISTS idx_skills_offered_user ON skills_offered(user_id)',
+    'CREATE INDEX IF NOT EXISTS idx_skills_wanted_user ON skills_wanted(user_id)',
+    'CREATE INDEX IF NOT EXISTS idx_certificates_user ON certificates(user_id)',
+    'CREATE INDEX IF NOT EXISTS idx_reviews_target ON reviews(target_user_id)',
+    'CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id)',
+    'CREATE INDEX IF NOT EXISTS idx_quiz_attempts_user ON quiz_attempts(user_id)',
+    'CREATE INDEX IF NOT EXISTS idx_support_doubts_status ON support_doubts(status)',
+    'CREATE INDEX IF NOT EXISTS idx_support_doubts_user ON support_doubts(raised_by_user_id)',
+    'CREATE INDEX IF NOT EXISTS idx_support_dbt_att_doubt ON support_doubt_attachments(doubt_id)',
+    'CREATE INDEX IF NOT EXISTS idx_support_answers_doubt ON support_answers(doubt_id)',
+    'CREATE INDEX IF NOT EXISTS idx_support_ans_att_ans ON support_answer_attachments(answer_id)',
+    'CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)'
+  ];
+
+  for (const sql of optimalIndexes) {
+    try {
+      if (isTurso && tursoClient) {
+        await tursoClient.execute(sql);
+      } else {
+        await db.runAsync(sql);
+      }
+    } catch (e) {
+      // Safe no-op
+    }
+  }
 }
 
 module.exports = {

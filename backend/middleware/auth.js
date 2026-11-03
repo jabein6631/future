@@ -53,11 +53,32 @@ function extractToken(req) {
   return null;
 }
 
+// High-Performance In-Memory User Context Cache (15s TTL)
+const userCache = new Map();
+function getCachedUser(key) {
+  const entry = userCache.get(String(key).toLowerCase());
+  if (entry && entry.expiresAt > Date.now()) {
+    return { ...entry.user };
+  }
+  return null;
+}
+function setCachedUser(key, user) {
+  const cleanUser = { ...user };
+  delete cleanUser.password_hash;
+  userCache.set(String(key).toLowerCase(), { user: cleanUser, expiresAt: Date.now() + 15000 });
+}
+
 /**
  * Primary Authentication Middleware
  * Enforces valid JWT token and injects full `req.user`
  */
 async function authenticateToken(req, res, next) {
+  // Fast path: if user context was already attached and verified in this request pipeline
+  if (req.user && req.user.id) {
+    req.currentUserId = req.user.id;
+    return next();
+  }
+
   const token = extractToken(req);
 
   if (!token) {
@@ -70,21 +91,27 @@ async function authenticateToken(req, res, next) {
 
   try {
     const decoded = verifyToken(token);
-    
-    // Look up live user record from database by ID or Email
-    const user = await db.getAsync(
-      `SELECT * FROM users WHERE id = ? OR (email IS NOT NULL AND LOWER(email) = ?)`,
-      [decoded.id, String(decoded.email || decoded.id).toLowerCase()]
-    );
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        error: 'User session invalid. Account not found.'
-      });
-    }
+    const cacheKey = decoded.id;
+    let user = getCachedUser(cacheKey);
 
-    user.badges = typeof user.badges_json === 'string' ? JSON.parse(user.badges_json || '[]') : (user.badges_json || []);
-    delete user.password_hash; // Never expose password hash downstream
+    if (!user) {
+      // Look up live user record from database by ID or Email
+      user = await db.getAsync(
+        `SELECT * FROM users WHERE id = ? OR (email IS NOT NULL AND LOWER(email) = ?)`,
+        [decoded.id, String(decoded.email || decoded.id).toLowerCase()]
+      );
+      if (!user) {
+        return res.status(401).json({
+          success: false,
+          error: 'User session invalid. Account not found.'
+        });
+      }
+
+      user.badges = typeof user.badges_json === 'string' ? JSON.parse(user.badges_json || '[]') : (user.badges_json || []);
+      delete user.password_hash; // Never expose password hash downstream
+      setCachedUser(user.id, user);
+      if (user.email) setCachedUser(user.email, user);
+    }
 
     // Attach user context
     req.user = user;
@@ -103,14 +130,26 @@ async function authenticateToken(req, res, next) {
  * Attaches req.user if a valid token is provided, without blocking unauthenticated requests
  */
 async function optionalAuth(req, res, next) {
+  if (req.user && req.user.id) {
+    req.currentUserId = req.user.id;
+    return next();
+  }
+
   const token = extractToken(req);
   if (token) {
     try {
       const decoded = verifyToken(token);
-      const user = await db.getAsync(`SELECT * FROM users WHERE id = ?`, [decoded.id]);
+      let user = getCachedUser(decoded.id);
+      if (!user) {
+        user = await db.getAsync(`SELECT * FROM users WHERE id = ?`, [decoded.id]);
+        if (user) {
+          user.badges = typeof user.badges_json === 'string' ? JSON.parse(user.badges_json || '[]') : (user.badges_json || []);
+          delete user.password_hash;
+          setCachedUser(user.id, user);
+          if (user.email) setCachedUser(user.email, user);
+        }
+      }
       if (user) {
-        user.badges = typeof user.badges_json === 'string' ? JSON.parse(user.badges_json || '[]') : (user.badges_json || []);
-        delete user.password_hash;
         req.user = user;
         req.currentUserId = user.id;
       }
@@ -121,10 +160,17 @@ async function optionalAuth(req, res, next) {
 
   if (!req.user && req.headers['x-user-id']) {
     try {
-      const user = await db.getAsync(`SELECT * FROM users WHERE id = ?`, [req.headers['x-user-id']]);
+      const uid = req.headers['x-user-id'];
+      let user = getCachedUser(uid);
+      if (!user) {
+        user = await db.getAsync(`SELECT * FROM users WHERE id = ?`, [uid]);
+        if (user) {
+          user.badges = typeof user.badges_json === 'string' ? JSON.parse(user.badges_json || '[]') : (user.badges_json || []);
+          delete user.password_hash;
+          setCachedUser(user.id, user);
+        }
+      }
       if (user) {
-        user.badges = typeof user.badges_json === 'string' ? JSON.parse(user.badges_json || '[]') : (user.badges_json || []);
-        delete user.password_hash;
         req.user = user;
         req.currentUserId = user.id;
       }

@@ -17,96 +17,80 @@ const notificationController = {
         return res.status(401).json({ success: false, error: 'Authentication required' });
       }
 
-      // 1. Peer Messages: Unread messages sent to this user
-      let messagesCount = 0;
-      try {
-        const msgRow = await db.getAsync(
+      // Execute all 7 count queries concurrently via Promise.all
+      const [
+        msgRow,
+        swapRow,
+        sessRow,
+        doubtRow,
+        certRow,
+        quizRow,
+        liveRow
+      ] = await Promise.all([
+        db.getAsync(
           `SELECT COUNT(*) AS unreadCount FROM messages 
            WHERE receiver_id = ? AND (status != 'READ' OR read_at IS NULL)`,
           [userId]
-        );
-        messagesCount = Number(msgRow?.unreadCount || 0);
-      } catch (err) {
-        console.warn('Error counting unread messages:', err.message);
-      }
-
-      // 2. Book Swap: Incoming pending swap requests requiring response for this mentor
-      let bookSwapCount = 0;
-      try {
-        const swapRow = await db.getAsync(
+        ).catch(err => {
+          console.warn('Error counting unread messages:', err.message);
+          return { unreadCount: 0 };
+        }),
+        db.getAsync(
           `SELECT COUNT(*) AS swapCount FROM sessions 
            WHERE teacher_id = ? AND session_type != 'GROUP_COHORT' AND UPPER(status) = 'PENDING'`,
           [userId]
-        );
-        bookSwapCount = Number(swapRow?.swapCount || 0);
-      } catch (err) {
-        console.warn('Error counting book swap requests:', err.message);
-      }
-
-      // 3. My Sessions: Actionable session items requiring user action
-      // (Pending requests for mentor, or student pending response, or active sessions today)
-      let mySessionsCount = 0;
-      try {
-        const sessRow = await db.getAsync(
+        ).catch(err => {
+          console.warn('Error counting book swap requests:', err.message);
+          return { swapCount: 0 };
+        }),
+        db.getAsync(
           `SELECT COUNT(*) AS pendingCount FROM sessions 
            WHERE (teacher_id = ? OR student_id = ?) AND UPPER(status) = 'PENDING'`,
           [userId, userId]
-        );
-        mySessionsCount = Number(sessRow?.pendingCount || 0);
-      } catch (err) {
-        console.warn('Error counting my sessions:', err.message);
-      }
-
-      // 4. Support Desk: Open doubts / tickets across the platform
-      let supportCount = 0;
-      try {
-        const doubtRow = await db.getAsync(
+        ).catch(err => {
+          console.warn('Error counting my sessions:', err.message);
+          return { pendingCount: 0 };
+        }),
+        db.getAsync(
           `SELECT COUNT(*) AS openCount FROM support_doubts WHERE UPPER(status) = 'OPEN'`
-        );
-        supportCount = Number(doubtRow?.openCount || 0);
-      } catch (err) {
-        console.warn('Error counting open support doubts:', err.message);
-      }
-
-      // 5. Certificates & Portfolio: Actionable certificate states (NOT_VERIFIED or NEEDS_MANUAL_REVIEW)
-      let certCount = 0;
-      try {
-        const certRow = await db.getAsync(
+        ).catch(err => {
+          console.warn('Error counting open support doubts:', err.message);
+          return { openCount: 0 };
+        }),
+        db.getAsync(
           `SELECT COUNT(*) AS certCount FROM certificates 
            WHERE user_id = ? AND UPPER(verification_status) IN ('NOT_VERIFIED', 'NEEDS_MANUAL_REVIEW')`,
           [userId]
-        );
-        certCount = Number(certRow?.certCount || 0);
-      } catch (err) {
-        console.warn('Error counting certificates:', err.message);
-      }
-
-      // 6. Skill Assessments: Actionable assessment notifications
-      let assessmentCount = 0;
-      try {
-        const quizRow = await db.getAsync(
+        ).catch(err => {
+          console.warn('Error counting certificates:', err.message);
+          return { certCount: 0 };
+        }),
+        db.getAsync(
           `SELECT COUNT(*) AS quizCount FROM notifications 
            WHERE user_id = ? AND is_unread = 1 AND UPPER(type) IN ('QUIZ', 'ASSESSMENT')`,
           [userId]
-        );
-        assessmentCount = Number(quizRow?.quizCount || 0);
-      } catch (err) {
-        console.warn('Error counting assessment notifications:', err.message);
-      }
-
-      // 7. Live Session Room: Active ongoing sessions (IN_PROGRESS)
-      let liveRoomCount = 0;
-      try {
-        const liveRow = await db.getAsync(
+        ).catch(err => {
+          console.warn('Error counting assessment notifications:', err.message);
+          return { quizCount: 0 };
+        }),
+        db.getAsync(
           `SELECT COUNT(*) AS liveCount FROM sessions 
            WHERE (teacher_id = ? OR student_id = ?) 
              AND (UPPER(status) = 'IN_PROGRESS' OR (meeting_started_at IS NOT NULL AND meeting_ended_at IS NULL))`,
           [userId, userId]
-        );
-        liveRoomCount = Number(liveRow?.liveCount || 0);
-      } catch (err) {
-        console.warn('Error counting live room sessions:', err.message);
-      }
+        ).catch(err => {
+          console.warn('Error counting live room sessions:', err.message);
+          return { liveCount: 0 };
+        })
+      ]);
+
+      const messagesCount = Number(msgRow?.unreadCount || 0);
+      const bookSwapCount = Number(swapRow?.swapCount || 0);
+      const mySessionsCount = Number(sessRow?.pendingCount || 0);
+      const supportCount = Number(doubtRow?.openCount || 0);
+      const certCount = Number(certRow?.certCount || 0);
+      const assessmentCount = Number(quizRow?.quizCount || 0);
+      const liveRoomCount = Number(liveRow?.liveCount || 0);
 
       res.json({
         success: true,

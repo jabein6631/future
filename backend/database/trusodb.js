@@ -122,18 +122,42 @@ const dbProvider = {
     }
     
     if (users.length === 0) {
-      users = await db.allAsync(`SELECT * FROM users WHERE is_admin = 0`);
-      for (const u of users) {
+      const [allUsers, allSkillsOffered, allSkillsWanted, allCerts] = await Promise.all([
+        db.allAsync(`SELECT * FROM users WHERE is_admin = 0`),
+        db.allAsync(`SELECT * FROM skills_offered`),
+        db.allAsync(`SELECT * FROM skills_wanted`),
+        db.allAsync(`SELECT * FROM certificates`)
+      ]);
+
+      const skillsOfferedMap = {};
+      const skillsWantedMap = {};
+      const certsMap = {};
+
+      for (const s of (allSkillsOffered || [])) {
+        if (!skillsOfferedMap[s.user_id]) skillsOfferedMap[s.user_id] = [];
+        skillsOfferedMap[s.user_id].push(s);
+      }
+      for (const s of (allSkillsWanted || [])) {
+        if (!skillsWantedMap[s.user_id]) skillsWantedMap[s.user_id] = [];
+        skillsWantedMap[s.user_id].push(s);
+      }
+      for (const c of (allCerts || [])) {
+        if (!certsMap[c.user_id]) certsMap[c.user_id] = [];
+        certsMap[c.user_id].push(c);
+      }
+
+      for (const u of (allUsers || [])) {
         delete u.password_hash;
         try {
           u.badges = typeof u.badges_json === 'string' ? JSON.parse(u.badges_json || '[]') : (u.badges_json || []);
         } catch (e) {
           u.badges = [];
         }
-        u.skillsOffered = await db.allAsync(`SELECT * FROM skills_offered WHERE user_id = ?`, [u.id]);
-        u.skillsWanted = await db.allAsync(`SELECT * FROM skills_wanted WHERE user_id = ?`, [u.id]);
-        u.certificates = await db.allAsync(`SELECT * FROM certificates WHERE user_id = ?`, [u.id]);
+        u.skillsOffered = skillsOfferedMap[u.id] || [];
+        u.skillsWanted = skillsWantedMap[u.id] || [];
+        u.certificates = certsMap[u.id] || [];
       }
+      users = allUsers || [];
     }
 
     // Filter by search keyword
@@ -206,12 +230,20 @@ const dbProvider = {
     } catch (e) {
       user.badges = [];
     }
-    user.skillsOffered = await db.allAsync(`SELECT * FROM skills_offered WHERE user_id = ?`, [user.id]);
-    user.skillsWanted = await db.allAsync(`SELECT * FROM skills_wanted WHERE user_id = ?`, [user.id]);
-    user.certificates = await db.allAsync(`SELECT * FROM certificates WHERE user_id = ?`, [user.id]);
-    user.reviews = await db.allAsync(`SELECT * FROM reviews WHERE target_user_id = ? ORDER BY id DESC`, [user.id]);
-    user.transactions = await db.allAsync(`SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC, id DESC`, [user.id]);
-    user.quizAttempts = await db.allAsync(`SELECT * FROM quiz_attempts WHERE user_id = ? ORDER BY attempted_at DESC, id DESC`, [user.id]);
+    const [skillsOffered, skillsWanted, certificates, reviews, transactions, quizAttempts] = await Promise.all([
+      db.allAsync(`SELECT * FROM skills_offered WHERE user_id = ?`, [user.id]),
+      db.allAsync(`SELECT * FROM skills_wanted WHERE user_id = ?`, [user.id]),
+      db.allAsync(`SELECT * FROM certificates WHERE user_id = ?`, [user.id]),
+      db.allAsync(`SELECT * FROM reviews WHERE target_user_id = ? ORDER BY id DESC`, [user.id]),
+      db.allAsync(`SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC, id DESC`, [user.id]),
+      db.allAsync(`SELECT * FROM quiz_attempts WHERE user_id = ? ORDER BY attempted_at DESC, id DESC`, [user.id])
+    ]);
+    user.skillsOffered = skillsOffered || [];
+    user.skillsWanted = skillsWanted || [];
+    user.certificates = certificates || [];
+    user.reviews = reviews || [];
+    user.transactions = transactions || [];
+    user.quizAttempts = quizAttempts || [];
     for (const r of user.reviews) {
       try {
         r.tags = typeof r.tags_json === 'string' ? JSON.parse(r.tags_json || '[]') : (r.tags_json || []);
@@ -764,14 +796,21 @@ const dbProvider = {
   },
 
   async getSessions() {
-    await this.checkAndUpdateLiveAndExpiredSessions();
-    const sessions = await db.allAsync(`SELECT * FROM sessions ORDER BY created_at DESC`);
-    const attendees = await db.allAsync(`SELECT * FROM session_attendees ORDER BY joined_at ASC`);
-    const users = await db.allAsync(`SELECT id, name, avatar FROM users`);
+    const now = Date.now();
+    if (!this._lastSessionStatusCheck || now - this._lastSessionStatusCheck > 10000) {
+      this._lastSessionStatusCheck = now;
+      // Trigger update asynchronously without blocking the read response
+      this.checkAndUpdateLiveAndExpiredSessions().catch(e => console.warn('checkSessionStatus background err:', e.message));
+    }
+    const [sessions, attendees, users] = await Promise.all([
+      db.allAsync(`SELECT * FROM sessions ORDER BY created_at DESC`),
+      db.allAsync(`SELECT * FROM session_attendees ORDER BY joined_at ASC`),
+      db.allAsync(`SELECT id, name, avatar FROM users`)
+    ]);
     const userMap = {};
-    users.forEach(u => userMap[u.id] = u);
+    (users || []).forEach(u => userMap[u.id] = u);
 
-    return sessions.map(s => {
+    return (sessions || []).map(s => {
       const sessAttendees = attendees.filter(a => a.session_id === s.id);
       const teacher = userMap[s.teacher_id];
       const student = userMap[s.student_id];

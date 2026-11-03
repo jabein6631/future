@@ -877,6 +877,36 @@
         }
       });
 
+      // 2a. Instant Client-Side Password Visibility Toggle (0ms, 100% client-side DOM switch)
+      const attachPasswordToggle = (toggleBtnId, inputId) => {
+        const toggleBtn = document.getElementById(toggleBtnId);
+        const input = document.getElementById(inputId);
+        if (!toggleBtn || !input) return;
+
+        toggleBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const isPassword = input.type === 'password';
+          input.type = isPassword ? 'text' : 'password';
+          const icon = toggleBtn.querySelector('i');
+          if (icon) {
+            if (isPassword) {
+              icon.classList.remove('fa-eye');
+              icon.classList.add('fa-eye-slash');
+            } else {
+              icon.classList.remove('fa-eye-slash');
+              icon.classList.add('fa-eye');
+            }
+          }
+          input.focus();
+        });
+      };
+
+      attachPasswordToggle('portalLoginPasswordToggle', 'portalLoginPassword');
+      attachPasswordToggle('portalRegPasswordToggle', 'portalRegPassword');
+      attachPasswordToggle('portalNewPasswordToggle', 'portalNewPassword');
+      attachPasswordToggle('portalConfirmPasswordToggle', 'portalConfirmPassword');
+
       // 2b. Secure 3-Step Dynamic OTP Password Reset Controller
       const forgotLink = document.getElementById('portalForgotPasswordLink');
       const forgotForm = document.getElementById('portalForgotForm');
@@ -1453,7 +1483,7 @@
         } finally {
           if (submitBtn) {
             submitBtn.disabled = false;
-            submitBtn.innerHTML = `<span>Sign In to Dashboard</span> <i class="fa-solid fa-arrow-right"></i>`;
+            submitBtn.innerHTML = `<span>Sign In to Dashboard &rarr;</span>`;
           }
         }
       });
