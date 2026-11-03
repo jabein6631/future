@@ -7953,11 +7953,12 @@
       return null;
     },
 
-    showToast(message, icon = 'info') {
+    showToast(message, icon = 'info', description = '') {
       if (!message) return;
+      const msgStr = String(message).trim();
       return this.notify({
-        title: 'SkillSwap Notification',
-        message: String(message),
+        title: msgStr,
+        message: description ? String(description).trim() : msgStr,
         type: icon || 'general'
       });
     },
@@ -8227,73 +8228,52 @@
         badge.style.display = unreadCount > 0 ? 'flex' : 'none';
       }
 
-      const headerUnread = document.getElementById('notifHeaderUnreadBadge');
-      if (headerUnread) {
-        headerUnread.textContent = `${unreadCount} unread`;
-        headerUnread.style.display = unreadCount > 0 ? 'inline-block' : 'none';
-      }
-
       const list = document.getElementById('notifListContainer');
       if (!list) return;
 
       if (!notifs || notifs.length === 0) {
         list.innerHTML = `
-          <div class="notif-empty-state">
-            <div class="notif-empty-icon"><i class="fa-regular fa-bell"></i></div>
-            <div class="notif-empty-title">No notifications yet</div>
-            <div class="notif-empty-desc">Your assessments, certificates, swap requests, and activity alerts will appear here.</div>
+          <div style="padding: 2.5rem 1rem; text-align: center; color: var(--text-muted); font-size: 0.85rem;">
+            <i class="fa-regular fa-bell" style="font-size: 1.5rem; margin-bottom: 0.5rem; display: block; opacity: 0.4;"></i>
+            No notifications yet
           </div>
         `;
         return;
       }
 
-      const getIconConfig = (type) => {
+      const getIcon = (type) => {
         const t = (type || '').toLowerCase();
-        if (t.includes('award') || t.includes('tier') || t.includes('tutor')) return { icon: 'fa-award', cls: 'award' };
-        if (t.includes('quiz') || t.includes('assessment')) return { icon: 'fa-graduation-cap', cls: 'quiz' };
-        if (t.includes('cert')) return { icon: 'fa-certificate', cls: 'award' };
-        if (t.includes('check') || t.includes('success')) return { icon: 'fa-circle-check', cls: 'check' };
-        if (t.includes('calendar') || t.includes('session') || t.includes('booking') || t.includes('swap')) return { icon: 'fa-calendar-check', cls: 'calendar' };
-        if (t.includes('coins') || t.includes('credit') || t.includes('wallet') || t.includes('escrow')) return { icon: 'fa-coins', cls: 'coins' };
-        if (t.includes('user') || t.includes('profile')) return { icon: 'fa-user-check', cls: 'user' };
-        if (t.includes('error') || t.includes('fail') || t.includes('reject')) return { icon: 'fa-circle-exclamation', cls: 'error' };
-        if (t.includes('warn') || t.includes('review') || t.includes('triangle')) return { icon: 'fa-triangle-exclamation', cls: 'warning' };
-        if (t.includes('lock') || t.includes('security')) return { icon: 'fa-shield-halved', cls: 'lock' };
-        if (t.includes('message') || t.includes('chat')) return { icon: 'fa-comment-dots', cls: 'message' };
-        return { icon: 'fa-wand-magic-sparkles', cls: 'general' };
+        if (t.includes('credit') || t.includes('coins')) return 'coins';
+        if (t.includes('calendar') || t.includes('session') || t.includes('booking') || t.includes('masterclass')) return 'calendar-check';
+        if (t.includes('quiz') || t.includes('assessment')) return 'award';
+        if (t.includes('check') || t.includes('success')) return 'circle-check';
+        if (t.includes('clock')) return 'clock';
+        if (t.includes('user') || t.includes('profile')) return 'user';
+        return 'wand-magic-sparkles';
       };
 
       list.innerHTML = notifs.map(n => {
         const isUnread = Boolean(n.unread || n.is_unread == 1 || n.is_unread === true);
-        const { icon, cls } = getIconConfig(n.type);
+        const icon = getIcon(n.type);
         const safeId = this.escapeQuotes(n.id || '');
         const targetPage = n.target_page ? this.escapeQuotes(n.target_page) : '';
+        const titleText = this.escapeHtml(n.title || n.message || 'Notification');
+        const showSubtitle = n.message && n.message !== n.title;
 
         return `
-          <div class="notif-item ${isUnread ? 'unread' : 'read'}" onclick="window.app.handleNotificationClick('${safeId}', '${targetPage}')">
-            <div class="notif-icon-box notif-icon-${cls}">
-              <i class="fa-solid ${icon}"></i>
+          <div class="notif-item ${isUnread ? 'unread' : ''}" onclick="window.app.handleNotificationClick('${safeId}', '${targetPage}')">
+            <div style="font-size: 1.1rem; color: var(--primary); display: flex; align-items: center; justify-content: center; width: 22px; flex-shrink: 0; padding-top: 2px;">
+              <i class="fa-solid fa-${icon}"></i>
             </div>
-            <div class="notif-body">
-              <div class="notif-title-row">
-                <span class="notif-title">${this.escapeHtml(n.title)}</span>
-                ${isUnread ? '<span class="notif-unread-dot" title="Unread notification"></span>' : ''}
-              </div>
-              <div class="notif-message">${this.escapeHtml(n.message || '')}</div>
-              <div class="notif-footer">
-                <span class="notif-time"><i class="fa-regular fa-clock"></i> ${this.escapeHtml(n.time || 'Just now')}</span>
-                ${targetPage ? `<span class="notif-link-hint">Open <i class="fa-solid fa-arrow-right"></i></span>` : ''}
-              </div>
+            <div style="flex: 1; min-width: 0;">
+              <div style="font-weight: 700; color: var(--text-main, #0f172a); font-size: 0.85rem; line-height: 1.35;">${titleText}</div>
+              ${showSubtitle ? `<div style="font-size: 0.78rem; color: var(--text-secondary, #475569); margin-top: 2px; line-height: 1.35;">${this.escapeHtml(n.message)}</div>` : ''}
+              <div style="font-size: 0.7rem; color: var(--text-muted, #94a3b8); margin-top: 3px;">${this.escapeHtml(n.time || 'Just now')}</div>
             </div>
-            ${isUnread ? `
-              <button type="button" class="notif-item-read-btn" title="Mark as read" onclick="event.stopPropagation(); window.app.markSingleNotificationRead('${safeId}')">
-                <i class="fa-solid fa-check"></i>
-              </button>
-            ` : ''}
           </div>
         `;
       }).join('');
-    },
+    }
 
     async handleNotificationClick(id, targetPage) {
       if (id && window.store && typeof window.store.markNotificationRead === 'function') {

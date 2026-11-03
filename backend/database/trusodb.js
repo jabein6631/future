@@ -601,6 +601,24 @@ const dbProvider = {
       qualificationResult = await this.checkAndAwardCourseQualificationBonus(userId, quiz.skill_name);
     }
 
+    // Persist assessment completion notification in Turso
+    try {
+      const notifQuizId = 'notif_quiz_' + attemptId;
+      const passedTitle = passed
+        ? `🎉 Assessment Passed: ${quiz.skill_name} (${scorePercent}%)`
+        : `Assessment Completed: ${quiz.skill_name} (${scorePercent}%)`;
+      const passedMsg = passed
+        ? `Congratulations! You scored ${marksObtained}/${maxMarks} (${scorePercent}%) on ${quiz.skill_name}. Tier: ${tierInfo.tier}.`
+        : `You scored ${marksObtained}/${maxMarks} (${scorePercent}%) on ${quiz.skill_name}. Passing score is ${quiz.passing_score || 70}%.`;
+      await db.runAsync(
+        `INSERT INTO notifications (id, user_id, title, message, time, is_unread, type, target_page)
+         VALUES (?, ?, ?, ?, 'Just now', 1, 'quiz', 'view-quizzes')`,
+        [notifQuizId, userId, passedTitle, passedMsg]
+      );
+    } catch (e) {
+      console.warn('Error inserting quiz notification:', e.message);
+    }
+
     return {
       success: true,
       attemptId,
@@ -968,6 +986,27 @@ const dbProvider = {
       [newCount, sessionId]
     );
 
+    // Persist notifications for student and host in Turso
+    try {
+      const notifStudentId = 'notif_mc_' + Date.now() + '_' + Math.random().toString(36).substring(7);
+      await db.runAsync(
+        `INSERT INTO notifications (id, user_id, title, message, time, is_unread, type, target_page)
+         VALUES (?, ?, '🎉 Registered for Masterclass! (Free Join — 0 Credits)', ?, 'Just now', 1, 'calendar', 'view-sessions')`,
+        [notifStudentId, studentId, `You are registered for "${session.title || session.skill || 'Masterclass'}".`]
+      );
+
+      if (session.teacher_id && session.teacher_id !== studentId) {
+        const notifHostId = 'notif_host_' + Date.now() + '_' + Math.random().toString(36).substring(7);
+        await db.runAsync(
+          `INSERT INTO notifications (id, user_id, title, message, time, is_unread, type, target_page)
+           VALUES (?, ?, 'New Student Enrolled in Masterclass', ?, 'Just now', 1, 'calendar', 'view-sessions')`,
+          [notifHostId, session.teacher_id, `${student.name || 'A student'} joined your "${session.title || session.skill || 'Masterclass'}" roster.`]
+        );
+      }
+    } catch (e) {
+      console.warn('Error inserting masterclass notifications:', e.message);
+    }
+
     return {
       success: true,
       sessionId,
@@ -1109,6 +1148,33 @@ const dbProvider = {
        WHERE id = ?`,
       [rewardCredits, rewardCredits, sessionId]
     );
+
+    // Persist notifications for host and attendees in Turso
+    try {
+      const notifHostId = 'notif_mc_fin_' + Date.now() + '_h';
+      await db.runAsync(
+        `INSERT INTO notifications (id, user_id, title, message, time, is_unread, type, target_page)
+         VALUES (?, ?, '🎉 Masterclass Completed & Reward Deposited', ?, 'Just now', 1, 'coins', 'view-sessions')`,
+        [
+          notifHostId,
+          tutorId,
+          `Attendance: ${actualAttendees}/${totalUsers} (${attendancePercentage}%). +${rewardCredits} Credits awarded to your wallet.`
+        ]
+      );
+
+      for (const att of attendeesRows) {
+        if (att.user_id && att.user_id !== tutorId) {
+          const notifAttId = 'notif_mc_fin_' + Date.now() + '_' + att.user_id;
+          await db.runAsync(
+            `INSERT INTO notifications (id, user_id, title, message, time, is_unread, type, target_page)
+             VALUES (?, ?, 'Session Concluded', 'This live session has ended.', 'Just now', 1, 'clock', 'view-sessions')`,
+            [notifAttId, att.user_id]
+          );
+        }
+      }
+    } catch (e) {
+      console.warn('Error inserting masterclass completion notifications:', e.message);
+    }
 
     return {
       success: true,
