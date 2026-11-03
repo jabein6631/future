@@ -92,7 +92,7 @@ const notificationController = {
    */
   async getNotifications(req, res, next) {
     try {
-      const userId = req.user?.id || req.currentUserId || req.headers['x-user-id'] || 'sri';
+      const userId = req.user?.id || req.currentUserId || req.headers['x-user-id'] || null;
       if (!userId) {
         return res.status(401).json({ success: false, error: 'Authentication required' });
       }
@@ -117,7 +117,7 @@ const notificationController = {
    */
   async createNotification(req, res, next) {
     try {
-      const userId = req.user?.id || req.currentUserId || req.headers['x-user-id'] || req.body?.userId || 'sri';
+      const userId = req.user?.id || req.currentUserId || req.headers['x-user-id'] || req.body?.userId || null;
       if (!userId) {
         return res.status(401).json({ success: false, error: 'Authentication required' });
       }
@@ -194,7 +194,7 @@ const notificationController = {
    */
   async markAllRead(req, res, next) {
     try {
-      const userId = req.user?.id || req.currentUserId || req.headers['x-user-id'] || 'sri';
+      const userId = req.user?.id || req.currentUserId || req.headers['x-user-id'] || null;
       if (!userId) {
         return res.status(401).json({ success: false, error: 'Authentication required' });
       }
@@ -216,7 +216,7 @@ const notificationController = {
    */
   async markNotificationRead(req, res, next) {
     try {
-      const userId = req.user?.id || req.currentUserId || req.headers['x-user-id'] || 'sri';
+      const userId = req.user?.id || req.currentUserId || req.headers['x-user-id'] || null;
       const { id } = req.params;
       if (!userId) {
         return res.status(401).json({ success: false, error: 'Authentication required' });
@@ -239,7 +239,7 @@ const notificationController = {
    */
   async deleteNotification(req, res, next) {
     try {
-      const userId = req.user?.id || req.currentUserId || req.headers['x-user-id'] || 'sri';
+      const userId = req.user?.id || req.currentUserId || req.headers['x-user-id'] || null;
       const { id } = req.params;
       if (!userId) {
         return res.status(401).json({ success: false, error: 'Authentication required' });

@@ -55,6 +55,30 @@ class SkillSwapStore {
     }
   }
 
+  async fetchUserProfile(userId) {
+    try {
+      const targetId = userId || this.currentUser?.id || this.currentPersonaId;
+      if (!targetId || targetId === 'guest') return null;
+      const res = await fetch(`${this.apiBase}/users/${encodeURIComponent(targetId)}`, {
+        headers: this.getAuthHeaders()
+      });
+      const data = await res.json();
+      if (data.success && data.user) {
+        if (this.currentUser && this.currentUser.id === data.user.id) {
+          this.currentUser = { ...this.currentUser, ...data.user };
+        }
+        this.personas[data.user.id] = {
+          ...(this.personas[data.user.id] || {}),
+          ...data.user
+        };
+        return data.user;
+      }
+    } catch (e) {
+      console.warn('Could not fetch user profile:', e.message);
+    }
+    return null;
+  }
+
   async init() {
     try {
       // Clear legacy localStorage auth keys so new tabs start at Login page
@@ -275,17 +299,15 @@ class SkillSwapStore {
       full.skillsWanted = this.currentUser.skillsWanted || this.currentUser.skills_wanted || personaObj.skillsWanted || [];
       full.certificates = this.currentUser.certificates || personaObj.certificates || [];
       full.badges = this.currentUser.badges || personaObj.badges || (typeof this.currentUser.badges_json === 'string' ? JSON.parse(this.currentUser.badges_json) : ['Vignan Member', full.role]);
+      full.reviews = this.currentUser.reviews || personaObj.reviews || [];
+      full.quizAttempts = this.currentUser.quizAttempts || personaObj.quizAttempts || [];
       return full;
     }
     if (this.currentPersonaId && this.personas[this.currentPersonaId]) {
       const persona = this.personas[this.currentPersonaId];
       return { ...persona, role: persona.role || (persona.isAdmin ? 'ADMIN' : 'STUDENT') };
     }
-    const allRegistered = Object.values(this.personas);
-    if (allRegistered.length > 0) {
-      const first = allRegistered[0];
-      return { ...first, role: first.role || (first.isAdmin ? 'ADMIN' : 'STUDENT') };
-    }
+
     return {
       id: 'guest',
       name: 'Guest User',
@@ -392,7 +414,8 @@ class SkillSwapStore {
 
   async fetchCertificates(userId) {
     try {
-      const activeId = userId || this.currentPersonaId || this.currentUser?.id || 'sri';
+      const activeId = userId || this.currentUser?.id || this.currentPersonaId || null;
+      if (!activeId || activeId === 'guest') return [];
       const res = await fetch(`${this.apiBase}/certificates?userId=${encodeURIComponent(activeId)}`, {
         headers: this.getAuthHeaders()
       });
@@ -1185,11 +1208,15 @@ class SkillSwapStore {
       });
       const data = await res.json();
       if (data.success && data.wallet) {
-        const cur = this.getCurrentPersona();
-        cur.credits = data.wallet.availableCredits;
-        cur.escrowLocked = data.wallet.escrowLocked;
-        cur.lifetimeEarned = data.wallet.lifetimeEarned;
-        cur.lifetimeSpent = data.wallet.lifetimeSpent;
+        if (this.currentUser) {
+          this.currentUser.credits = data.wallet.availableCredits;
+          this.currentUser.escrowLocked = data.wallet.escrowLocked;
+          this.currentUser.lifetimeEarned = data.wallet.lifetimeEarned;
+          this.currentUser.lifetimeSpent = data.wallet.lifetimeSpent;
+        }
+        if (this.currentPersonaId && this.personas[this.currentPersonaId]) {
+          this.personas[this.currentPersonaId].credits = data.wallet.availableCredits;
+        }
       }
 
       const txRes = await fetch(`${this.apiBase}/wallet/transactions`, {
@@ -1797,7 +1824,7 @@ class SkillSwapStore {
     const notifId = id || ('notif_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6));
     const newNotif = {
       id: notifId,
-      user_id: this.currentPersonaId || 'sri',
+      user_id: this.currentUser?.id || this.currentPersonaId,
       title: String(title).trim(),
       message: String(message).trim(),
       time: 'Just now',

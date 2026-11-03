@@ -14,7 +14,7 @@ const certificateController = {
 
   async getCertificateStatus(req, res, next) {
     try {
-      const userId = req.user?.id || req.query.userId || req.currentUserId || 'sri';
+      const userId = req.user?.id || req.query.userId || req.currentUserId || null;
       const statusData = await supabaseService.getUserCertificateStatus(userId);
       res.json({ success: true, ...statusData });
     } catch (err) {
@@ -25,7 +25,7 @@ const certificateController = {
   async uploadCertificate(req, res, next) {
     try {
       const { skillName, issuer, certificateId, credentialId, credentialUrl, verificationScore, title, authority, scoreOrGrade, fileName, fileData, recipientName, issueDate } = req.body;
-      const userId = req.user?.id || req.body.userId || req.currentUserId || 'sri';
+      const userId = req.user?.id || req.body.userId || req.currentUserId || null;
 
       const result = await supabaseService.uploadCertificate(userId, {
         skillName,
@@ -104,7 +104,7 @@ const certificateController = {
   async verifyCertificateAI(req, res, next) {
     try {
       const { skillName, issuer, certificateId, credentialId, credentialUrl, verificationScore, title, authority, scoreOrGrade, fileName, fileData, recipientName, issueDate } = req.body;
-      const userId = req.user?.id || req.body.userId || req.currentUserId || 'sri';
+      const userId = req.user?.id || req.body.userId || req.currentUserId || null;
       const user = await supabaseService.getUserById(userId);
 
       const aiReport = analyzeAndVerifyCertificate({

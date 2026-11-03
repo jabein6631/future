@@ -17,7 +17,7 @@ const reviewController = {
   async addReview(req, res, next) {
     try {
       const { sessionId, tutorId, rating, comment, tags } = req.body;
-      const learnerId = req.body.learnerId || req.currentUserId || 'sri';
+      const learnerId = req.user?.id || req.body.learnerId || req.currentUserId || null;
       const result = await supabaseService.addReview({
         sessionId,
         learnerId,

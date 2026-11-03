@@ -26,7 +26,7 @@ const skillController = {
   async addSkillOffered(req, res, next) {
     try {
       const { name, category, level, description, rate } = req.body;
-      const userId = req.user?.id || req.body.userId || req.currentUserId || 'sri';
+      const userId = req.user?.id || req.body.userId || req.currentUserId || null;
       const result = await supabaseService.addSkillOffered(userId, { name, category, level, description, rate });
       res.status(201).json({ 
         success: true, 
@@ -43,7 +43,7 @@ const skillController = {
   async addSkillWanted(req, res, next) {
     try {
       const { name, category, level, goal } = req.body;
-      const userId = req.user?.id || req.body.userId || req.currentUserId || 'sri';
+      const userId = req.user?.id || req.body.userId || req.currentUserId || null;
       const result = await supabaseService.addSkillWanted(userId, { name, category, level, goal });
       res.status(201).json({ success: true, skill: result });
     } catch (err) {
@@ -54,7 +54,7 @@ const skillController = {
   async checkQualification(req, res, next) {
     try {
       const skillName = req.query.skillName || req.body.skillName;
-      const userId = req.user?.id || req.query.userId || 'sri';
+      const userId = req.user?.id || req.query.userId || null;
       const qualResult = await supabaseService.checkAndAwardCourseQualificationBonus(userId, skillName);
       res.json({ success: true, qualification: qualResult });
     } catch (err) {

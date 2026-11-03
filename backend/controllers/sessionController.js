@@ -40,7 +40,7 @@ const sessionController = {
         rate
       } = req.body;
       const result = await supabaseService.bookSessionEscrow({
-        learnerId: learnerId || req.body.learner_id || req.currentUserId || req.user?.id || 'sri',
+        learnerId: req.user?.id || learnerId || req.body.learner_id || req.currentUserId || null,
         tutorId: mentorId || tutorId || req.body.mentor_id || req.body.tutor_id || (req.body.mentor && (req.body.mentor.id || req.body.mentor.user_id || req.body.mentor.email)),
         skillName: skillName || subject,
         subject,
@@ -269,7 +269,7 @@ const sessionController = {
   async completeCohort(req, res, next) {
     try {
       const { id } = req.params;
-      const tutorId = req.user?.id || req.currentUserId || 'sri';
+      const tutorId = req.user?.id || req.currentUserId || null;
       const result = await supabaseService.finalizeMasterclassAttendance({
         sessionId: id,
         tutorId

@@ -1493,7 +1493,27 @@
           if (appInstance && typeof appInstance.hideEntrancePortal === 'function') {
             appInstance.hideEntrancePortal();
           } else {
-            const overlay = document.getElementById('entrancePortalOverlay');
+            // Reset profile overview card to avoid displaying previous user's data
+      const pName = document.getElementById('profileCardName');
+      if (pName) pName.textContent = 'Sign In to View Profile';
+      const pUser = document.getElementById('profileCardUserId');
+      if (pUser) pUser.textContent = '--';
+      const pMajor = document.getElementById('profileCardMajor');
+      if (pMajor) pMajor.textContent = '';
+      const pBio = document.getElementById('profileCardBio');
+      if (pBio) pBio.textContent = '';
+      const pCertGrid = document.getElementById('profileCertificatesGrid');
+      if (pCertGrid) pCertGrid.innerHTML = '';
+      const pTeach = document.getElementById('profileSkillsOfferedList');
+      if (pTeach) pTeach.innerHTML = '';
+      const pLearn = document.getElementById('profileSkillsWantedList');
+      if (pLearn) pLearn.innerHTML = '';
+      const pRev = document.getElementById('profileReviewsContainer');
+      if (pRev) pRev.innerHTML = '';
+      const pQuiz = document.getElementById('profileQuizAttemptsTableBody');
+      if (pQuiz) pQuiz.innerHTML = '';
+
+      const overlay = document.getElementById('entrancePortalOverlay');
             if (overlay) {
               overlay.classList.add('portal-hidden');
               overlay.style.display = 'none';
@@ -1978,7 +1998,7 @@
             headers,
             body: JSON.stringify({
               userId: current.id,
-              recipientName: current.name || 'Sri Dhanush',
+              recipientName: current.name || 'User',
               skillName,
               authority,
               issuer: authority,
@@ -2000,7 +2020,7 @@
           const aiReport = data.aiReport || {
             result: data.result || (data.success ? 'REAL' : 'FAKE'),
             confidence: data.result === 'REAL' ? 99 : 92,
-            recipient_name: current.name || 'Sri Dhanush',
+            recipient_name: current.name || 'User',
             certificate_id: credentialId,
             course: title,
             issuer: authority,
@@ -2427,7 +2447,7 @@
       if (collegeInput) collegeInput.value = user.college || 'Vignan University';
       if (majorInput) majorInput.value = user.major || '';
       if (roleSelect) roleSelect.value = (user.role === 'ADMIN' || user.isAdmin) ? 'ADMIN' : 'STUDENT';
-      if (avatarSelect) avatarSelect.value = user.avatar || user.id || 'sri';
+      if (avatarSelect) avatarSelect.value = user.avatar || user.id || 'default_avatar';
       if (bioInput) bioInput.value = user.bio || '';
       if (passwordInput) passwordInput.value = '';
 
@@ -2655,8 +2675,8 @@
             method: 'POST',
             headers,
             body: JSON.stringify({
-              userId: current?.id || 'sri',
-              recipientName: current?.name || 'Sri Dhanush',
+              userId: current?.id,
+              recipientName: current?.name || 'User',
               skillName: courseName,
               authority: authority,
               issuer: authority,
@@ -7532,7 +7552,7 @@
         if (token) headers['Authorization'] = `Bearer ${token}`;
         if (current?.id) headers['x-user-id'] = current.id;
 
-        const res = await fetch(`/api/certificates/status?userId=${encodeURIComponent(current?.id || 'sri')}`, { headers });
+        if (!current?.id) return; const res = await fetch(`/api/certificates/status?userId=${encodeURIComponent(current.id)}`, { headers });
         const data = await res.json();
 
         if (data.success) {
@@ -7959,6 +7979,313 @@
       }
     },
 
+    /**
+     * Render Certificates & Portfolio (view-profile)
+     * Strictly renders the authenticated user's profile, qualifications,
+     * skills offered, skills wanted, certificates, reviews, and test history.
+     */
+    async renderProfile() {
+      const user = window.store.getCurrentPersona();
+      if (!user || !user.id || user.id === 'guest') return;
+
+      // 1. Profile Overview Card
+      const nameEl = document.getElementById('profileCardName');
+      if (nameEl) nameEl.textContent = user.name || 'User';
+
+      const avatarEl = document.getElementById('profileCardAvatar');
+      if (avatarEl) {
+        avatarEl.src = window.getStudentAvatar(user.id);
+        avatarEl.alt = user.name || 'Profile';
+      }
+
+      const majorEl = document.getElementById('profileCardMajor');
+      if (majorEl) {
+        majorEl.textContent = user.major ? `${user.major} • ${user.college || 'Vignan University'}` : (user.college || 'Vignan University');
+      }
+
+      const bioEl = document.getElementById('profileCardBio');
+      if (bioEl) {
+        bioEl.textContent = user.bio || `Student at ${user.college || 'Vignan University'} passionate about peer learning and skill exchange.`;
+      }
+
+      const userIdEl = document.getElementById('profileCardUserId');
+      if (userIdEl) userIdEl.textContent = user.id;
+
+      const loginCountEl = document.getElementById('profileCardLoginCount');
+      if (loginCountEl) {
+        const count = user.login_count || 1;
+        loginCountEl.textContent = `${count} Login${count === 1 ? '' : 's'}`;
+      }
+
+      const lastLoginEl = document.getElementById('profileCardLastLogin');
+      if (lastLoginEl) {
+        lastLoginEl.textContent = user.last_login_at
+          ? new Date(user.last_login_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+          : 'Active now';
+      }
+
+      const rolePillEl = document.getElementById('profileCardRolePill');
+      if (rolePillEl) {
+        const role = user.role || 'STUDENT';
+        rolePillEl.textContent = role.toUpperCase();
+        rolePillEl.className = `auth-role-pill role-${role.toLowerCase()}`;
+      }
+
+      const dbStatusEl = document.getElementById('profileCardDbStatus');
+      if (dbStatusEl) dbStatusEl.textContent = 'Turso Cloud Synced';
+
+      // 2. Determine Tutor Tier & Badge
+      const certs = Array.isArray(user.certificates) ? user.certificates : (await window.store.fetchCertificates(user.id) || []);
+      const quizAttempts = Array.isArray(user.quizAttempts) ? user.quizAttempts : [];
+      const hasPassedQuiz = quizAttempts.some(a => a.passed === 1 || (a.score_percent !== undefined && a.score_percent >= 70));
+      const hasVerifiedCert = certs.some(c => c.is_verified === 1 || c.verification_status === 'VERIFIED');
+
+      let tierBadgeText = '🎓 Student Learner';
+      let tierBadgeBg = 'rgba(100, 116, 139, 0.15)';
+      let tierBadgeColor = '#475569';
+      let tierBorder = 'rgba(100, 116, 139, 0.3)';
+
+      if (hasVerifiedCert && hasPassedQuiz) {
+        tierBadgeText = '🥇 Elite Master Tutor';
+        tierBadgeBg = 'rgba(245, 158, 11, 0.15)';
+        tierBadgeColor = '#b45309';
+        tierBorder = 'rgba(245, 158, 11, 0.4)';
+      } else if (hasVerifiedCert) {
+        tierBadgeText = '🥈 Advanced Tutor';
+        tierBadgeBg = 'rgba(59, 130, 246, 0.15)';
+        tierBadgeColor = '#1d4ed8';
+        tierBorder = 'rgba(59, 130, 246, 0.4)';
+      } else if (hasPassedQuiz) {
+        tierBadgeText = '🥉 Bronze Tutor';
+        tierBadgeBg = 'rgba(16, 185, 129, 0.15)';
+        tierBadgeColor = '#059669';
+        tierBorder = 'rgba(16, 185, 129, 0.4)';
+      } else if (user.role === 'ADMIN' || user.isAdmin) {
+        tierBadgeText = '🏛️ Faculty Coordinator';
+        tierBadgeBg = 'rgba(139, 92, 246, 0.15)';
+        tierBadgeColor = '#6d28d9';
+        tierBorder = 'rgba(139, 92, 246, 0.4)';
+      }
+
+      const topTierBadgeEl = document.getElementById('profileCardTopTierBadge');
+      if (topTierBadgeEl) {
+        topTierBadgeEl.innerHTML = `<i class="fa-solid fa-medal"></i> ${tierBadgeText}`;
+        topTierBadgeEl.style.background = tierBadgeBg;
+        topTierBadgeEl.style.color = tierBadgeColor;
+        topTierBadgeEl.style.borderColor = tierBorder;
+      }
+
+      // 3. Badges Row
+      const badgeContainer = document.getElementById('profileBadgeContainer');
+      if (badgeContainer) {
+        const badges = Array.isArray(user.badges) && user.badges.length > 0
+          ? user.badges
+          : ['Vignan Member', user.role || 'STUDENT'];
+        badgeContainer.innerHTML = badges.map(b => `
+          <span class="student-badge" style="background: var(--bg-card); border: 1px solid var(--border-subtle); color: var(--text-primary); font-size: 0.74rem;">
+            <i class="fa-solid fa-certificate" style="color: var(--primary);"></i> ${this.escapeHtml(b)}
+          </span>
+        `).join('');
+      }
+
+      // 4. Verified Certificates Showcase Grid
+      const certGrid = document.getElementById('profileCertificatesGrid');
+      if (certGrid) {
+        if (!certs || certs.length === 0) {
+          certGrid.innerHTML = `
+            <div style="grid-column: 1 / -1; text-align: center; padding: 2rem 1.5rem; color: var(--text-muted); background: var(--bg-subtle); border-radius: var(--radius-lg); border: 1px dashed var(--border-medium);">
+              <i class="fa-solid fa-award" style="font-size: 2.2rem; margin-bottom: 0.6rem; color: var(--text-muted); opacity: 0.7;"></i>
+              <div style="font-weight: 700; font-size: 0.95rem; color: var(--text-primary);">No External Academic Certificates Uploaded</div>
+              <p style="font-size: 0.8rem; color: var(--text-secondary); max-width: 440px; margin: 0.35rem auto 1rem;">
+                Upload your verified NPTEL, Coursera or University certificates to boost your tutor tier up to 2.5 Cr/hr.
+              </p>
+              <button class="btn btn-emerald btn-sm" onclick="window.app.switchView('view-upload-cert')">
+                <i class="fa-solid fa-cloud-arrow-up"></i> Upload Certificate Now
+              </button>
+            </div>
+          `;
+        } else {
+          certGrid.innerHTML = certs.map(c => {
+            const isVerified = c.is_verified === 1 || c.verification_status === 'VERIFIED';
+            const title = this.escapeHtml(c.title || c.skill_name || 'Academic Credential');
+            const issuer = this.escapeHtml(c.authority || c.issuer || 'NPTEL / External Body');
+            const credId = this.escapeHtml(c.credential_id || c.id || '');
+            const score = this.escapeHtml(c.score_or_grade || 'Passed');
+            return `
+              <div style="background: var(--bg-subtle); border: 1.5px solid ${isVerified ? 'rgba(16, 185, 129, 0.3)' : 'var(--border-subtle)'}; border-radius: var(--radius-lg); padding: 1.15rem; display: flex; flex-direction: column; justify-content: space-between; gap: 0.75rem;">
+                <div>
+                  <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 0.5rem; margin-bottom: 0.4rem;">
+                    <div style="font-weight: 800; font-size: 0.92rem; color: var(--text-primary); line-height: 1.35;">${title}</div>
+                    <span style="font-size: 0.68rem; font-weight: 800; padding: 0.15rem 0.5rem; border-radius: var(--radius-sm); background: ${isVerified ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)'}; color: ${isVerified ? '#059669' : '#d97706'}; white-space: nowrap;">
+                      ${isVerified ? '✓ VERIFIED' : '⏳ PENDING'}
+                    </span>
+                  </div>
+                  <div style="font-size: 0.76rem; color: var(--text-secondary); margin-bottom: 0.2rem;">
+                    <i class="fa-solid fa-building-columns"></i> ${issuer}
+                  </div>
+                  ${credId ? `<div style="font-size: 0.72rem; color: var(--text-muted); font-family: monospace;">ID: ${credId}</div>` : ''}
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px dashed var(--border-subtle); padding-top: 0.5rem; font-size: 0.74rem;">
+                  <span style="color: var(--text-muted);">Grade: <strong style="color: var(--text-primary);">${score}</strong></span>
+                  <span style="color: #059669; font-weight: 700;">+2.0 Cr Tutor Boost</span>
+                </div>
+              </div>
+            `;
+          }).join('');
+        }
+      }
+
+      // 5. Courses I Teach (Skills Offered)
+      const teachList = document.getElementById('profileSkillsOfferedList');
+      if (teachList) {
+        const skills = Array.isArray(user.skillsOffered) ? user.skillsOffered : (Array.isArray(user.skills_offered) ? user.skills_offered : []);
+        if (skills.length === 0) {
+          teachList.innerHTML = `
+            <div style="text-align: center; padding: 1.75rem 1rem; color: var(--text-muted); background: var(--bg-subtle); border-radius: var(--radius-md); border: 1px dashed var(--border-medium);">
+              <div style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary);">No courses listed to teach yet.</div>
+              <button class="btn btn-secondary btn-sm" style="margin-top: 0.6rem;" onclick="window.app.openAddSkillModal('offered')">
+                <i class="fa-solid fa-plus"></i> Add Course to Teach
+              </button>
+            </div>
+          `;
+        } else {
+          teachList.innerHTML = skills.map((s, idx) => `
+            <div style="background: var(--bg-subtle); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 0.75rem 0.95rem; display: flex; justify-content: space-between; align-items: center; gap: 0.75rem;">
+              <div style="overflow: hidden;">
+                <div style="font-weight: 750; font-size: 0.88rem; color: var(--text-primary);">${this.escapeHtml(s.name)}</div>
+                <div style="font-size: 0.74rem; color: var(--text-muted); margin-top: 0.15rem;">
+                  ${this.escapeHtml(s.level || 'Intermediate')} • ${this.escapeHtml(s.category || 'Tech')}
+                </div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 0.6rem; flex-shrink: 0;">
+                <span class="support-bounty-badge" style="font-size: 0.75rem; padding: 0.2rem 0.55rem;">
+                  ${Number(s.rate || 1.0).toFixed(1)} Cr/hr
+                </span>
+                <button type="button" class="btn btn-secondary btn-sm" style="padding: 0.2rem 0.45rem; font-size: 0.7rem;" onclick="window.app.removeSkill?.('offered', ${idx}) || alert('Remove course');" title="Remove Course">
+                  <i class="fa-solid fa-trash" style="color: var(--accent-rose);"></i>
+                </button>
+              </div>
+            </div>
+          `).join('');
+        }
+      }
+
+      // 6. Skills I Want to Learn (Skills Wanted)
+      const learnList = document.getElementById('profileSkillsWantedList');
+      if (learnList) {
+        const wanted = Array.isArray(user.skillsWanted) ? user.skillsWanted : (Array.isArray(user.skills_wanted) ? user.skills_wanted : []);
+        if (wanted.length === 0) {
+          learnList.innerHTML = `
+            <div style="text-align: center; padding: 1.75rem 1rem; color: var(--text-muted); background: var(--bg-subtle); border-radius: var(--radius-md); border: 1px dashed var(--border-medium);">
+              <div style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary);">No learning goals listed yet.</div>
+              <button class="btn btn-secondary btn-sm" style="margin-top: 0.6rem;" onclick="window.app.openAddSkillModal('wanted')">
+                <i class="fa-solid fa-plus"></i> Add Learning Goal
+              </button>
+            </div>
+          `;
+        } else {
+          learnList.innerHTML = wanted.map((w, idx) => `
+            <div style="background: var(--bg-subtle); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 0.75rem 0.95rem; display: flex; justify-content: space-between; align-items: center; gap: 0.75rem;">
+              <div style="overflow: hidden;">
+                <div style="font-weight: 750; font-size: 0.88rem; color: var(--text-primary);">${this.escapeHtml(w.name)}</div>
+                <div style="font-size: 0.74rem; color: var(--text-muted); margin-top: 0.15rem;">
+                  Goal: ${this.escapeHtml(w.goal || 'Skill development & practical projects')}
+                </div>
+              </div>
+              <button type="button" class="btn btn-secondary btn-sm" style="padding: 0.2rem 0.45rem; font-size: 0.7rem; flex-shrink: 0;" onclick="window.app.removeSkill?.('wanted', ${idx}) || alert('Remove goal');" title="Remove Goal">
+                <i class="fa-solid fa-trash" style="color: var(--accent-rose);"></i>
+              </button>
+            </div>
+          `).join('');
+        }
+      }
+
+      // 7. Student Reviews & Feedback
+      const reviewsContainer = document.getElementById('profileReviewsContainer');
+      const reviewsStatsEl = document.getElementById('profileReviewsStats');
+      const reviews = Array.isArray(user.reviews) ? user.reviews : [];
+
+      if (reviewsStatsEl) {
+        reviewsStatsEl.textContent = reviews.length > 0
+          ? `⭐ ${(Number(user.rating) || 5.0).toFixed(1)} Rating (based on ${reviews.length} verified review${reviews.length === 1 ? '' : 's'})`
+          : '⭐ 5.0 Rating (New Verified Tutor)';
+      }
+
+      if (reviewsContainer) {
+        if (reviews.length === 0) {
+          reviewsContainer.innerHTML = `
+            <div style="grid-column: 1 / -1; text-align: center; padding: 2rem 1.5rem; color: var(--text-muted); background: var(--bg-card); border-radius: var(--radius-lg); border: 1px dashed var(--border-medium);">
+              <i class="fa-solid fa-comment-dots" style="font-size: 2rem; color: var(--text-muted); margin-bottom: 0.5rem; opacity: 0.6;"></i>
+              <div style="font-weight: 700; font-size: 0.95rem; color: var(--text-primary);">No Student Reviews Yet</div>
+              <div style="font-size: 0.8rem; color: var(--text-secondary); max-width: 420px; margin: 0.25rem auto;">
+                Ratings and reviews from students will appear here after completed swap sessions and solved support tickets.
+              </div>
+            </div>
+          `;
+        } else {
+          reviewsContainer.innerHTML = reviews.map(r => `
+            <div style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: 1.15rem; display: flex; flex-direction: column; justify-content: space-between; gap: 0.6rem;">
+              <div>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem;">
+                  <span style="font-weight: 750; font-size: 0.88rem; color: var(--text-primary);">
+                    <i class="fa-regular fa-user" style="color: var(--primary);"></i> ${this.escapeHtml(r.reviewer_name || 'Anonymous Student')}
+                  </span>
+                  <div style="display: flex; gap: 0.15rem; color: #f59e0b; font-size: 0.82rem;">
+                    ${[1, 2, 3, 4, 5].map(s => `<i class="fa-${(r.rating || 5) >= s ? 'solid' : 'regular'} fa-star"></i>`).join('')}
+                  </div>
+                </div>
+                <div style="font-size: 0.74rem; color: var(--text-muted); margin-bottom: 0.4rem;">
+                  Skill: <strong>${this.escapeHtml(r.skill || 'Mentoring')}</strong>
+                </div>
+                <div style="font-size: 0.82rem; color: var(--text-secondary); line-height: 1.45;">
+                  ${this.escapeHtml(r.comment || 'Great session! Very helpful explanations.')}
+                </div>
+              </div>
+              <div style="font-size: 0.7rem; color: var(--text-muted); text-align: right;">
+                ${r.created_at ? new Date(r.created_at).toLocaleDateString() : 'Verified Review'}
+              </div>
+            </div>
+          `).join('');
+        }
+      }
+
+      // 8. AI Dynamic Assessment & Qualification Records
+      const quizTableBody = document.getElementById('profileQuizAttemptsTableBody');
+      if (quizTableBody) {
+        if (quizAttempts.length === 0) {
+          quizTableBody.innerHTML = `
+            <tr>
+              <td colspan="7" style="text-align: center; padding: 2rem 1rem; color: var(--text-muted);">
+                <i class="fa-solid fa-clipboard-check" style="font-size: 1.8rem; margin-bottom: 0.5rem; opacity: 0.5;"></i>
+                <div style="font-weight: 700; color: var(--text-secondary); margin-bottom: 0.25rem;">No Assessment Records Found</div>
+                <div style="font-size: 0.8rem;">Take a 20-Question AI Dynamic Quiz in any domain to certify your skill level and earn tutor credits!</div>
+              </td>
+            </tr>
+          `;
+        } else {
+          quizTableBody.innerHTML = quizAttempts.map(a => {
+            const isPass = a.passed === 1 || (a.score_percent !== undefined && a.score_percent >= 70);
+            const dateStr = a.attempted_at ? new Date(a.attempted_at).toLocaleDateString() : 'Recent';
+            return `
+              <tr>
+                <td style="font-size: 0.8rem; color: var(--text-secondary);">${dateStr}</td>
+                <td><strong>${this.escapeHtml(a.skill_name || 'General')}</strong></td>
+                <td>${a.total_questions || 20} Questions</td>
+                <td style="font-size: 0.78rem; font-family: monospace;">+${(a.correct_count || 0) * 3} / -${a.wrong_count || 0} / 0</td>
+                <td><strong>${a.marks_obtained || 0}</strong> / ${a.max_marks || 60}</td>
+                <td><span style="font-weight: 800; color: ${isPass ? '#059669' : '#e11d48'};">${a.score_percent || 0}%</span></td>
+                <td>
+                  <span class="student-badge" style="background: ${isPass ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)'}; color: ${isPass ? '#059669' : '#b91c1c'}; font-size: 0.72rem;">
+                    ${isPass ? `✓ ${a.tier_awarded || 'Passed'}` : '✗ Did not qualify'}
+                  </span>
+                </td>
+              </tr>
+            `;
+          }).join('');
+        }
+      }
+    },
+
     renderNavbar() {
       const user = window.store.getCurrentPersona();
       const role = window.store.getUserRole();
@@ -8022,7 +8349,7 @@
       const instAvatar = document.getElementById('liveRoomInstructorAvatar');
       const learnAvatar = document.getElementById('liveRoomLearnerAvatar');
       if (instAvatar) instAvatar.src = window.getStudentAvatar('rishitha');
-      if (learnAvatar) learnAvatar.src = window.getStudentAvatar('sri');
+      if (learnAvatar && user?.id) learnAvatar.src = window.getStudentAvatar(user.id);
     },
 
     async notify({ title, message, type = 'general', target_page = null }) {
@@ -10328,9 +10655,9 @@
         const user = window.store.getCurrentPersona();
         const emailInput = document.getElementById('loginEmailInput');
         const passInput = document.getElementById('loginPasswordInput');
-        if (emailInput) emailInput.value = user.email || (user.id + '@vignan.ac.in') || 'sri@vignan.ac.in';
+        if (emailInput) emailInput.value = user.email || (user.id + '@vignan.ac.in');
         if (passInput) passInput.value = 'Password123';
-        this.showToast(`Auto-filled verified credentials for ${user.name || 'Sri Dhanush'}`, 'user');
+        this.showToast(`Auto-filled verified credentials for ${user.name || 'User'}`, 'user');
       });
 
       // Auth Tabs Navigation
@@ -10500,7 +10827,7 @@
       const isCohort = session.session_type === 'GROUP_COHORT';
       const isTutor = (session.teacher_id === currentPersona.id || session.teacher?.id === currentPersona.id);
       const tutorName = session.teacher?.name || session.teacherName || session.teacher_id || 'Instructor';
-      const tutorId = session.teacher?.id || session.teacher_id || 'sri';
+      const tutorId = session.teacher?.id || session.teacher_id;
       const learnerName = session.learner?.name || session.studentName || session.student_id || 'Learner';
       const learnerId = session.learner?.id || session.student_id || 'rishitha';
 

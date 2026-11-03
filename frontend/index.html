@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 
@@ -12,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link
-    href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+    href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&amp;family=Plus+Jakarta+Sans:wght@400;500;600;700;800&amp;display=swap"
     rel="stylesheet">
 
   <!-- Icons via FontAwesome -->
@@ -462,7 +461,7 @@
         <div class="persona-switcher" id="personaSwitcherBtn" title="View User Profile Dashboard">
           <img src="" alt="Avatar" class="persona-avatar" id="navUserAvatar">
           <div class="persona-meta">
-            <span class="persona-name" id="navUserName">Sri Dhanush</span>
+            <span class="persona-name" id="navUserName">--</span>
             <span class="persona-role" id="navUserRole">🥇 Elite Master Tutor</span>
           </div>
           <i class="fa-solid fa-chevron-down" style="font-size: 0.75rem; color: var(--text-muted);"></i>
@@ -2669,8 +2668,7 @@
                 <div class="video-avatar-holder" id="liveRoomInstructorAvatarHolder" style="display: none;">
                   <img src="" alt="Instructor" id="liveRoomInstructorAvatar"
                     style="width: 68px; height: 68px; border-radius: 50%;">
-                  <div style="font-weight: 700; font-size: 0.88rem;" id="liveRoomInstructorName">Sri Dhanush (Host
-                    Tutor)</div>
+                  <div style="font-weight: 700; font-size: 0.88rem;" id="liveRoomInstructorName">Host Tutor</div>
                   <div style="font-size: 0.75rem; color: #60a5fa;" id="liveRoomInstructorTier">🥇 Elite Master Tutor •
                     1.0 Cr / student</div>
                   <div style="font-size: 0.72rem; color: #ef4444; font-weight: 700; margin-top: 0.25rem;"><i
@@ -2681,7 +2679,7 @@
                 <div class="video-live-badge"><span class="status-dot-green"></span> <span
                     id="liveRoomInstructorResTag">1080p 60FPS</span></div>
                 <div class="video-name-tag"><i class="fa-solid fa-chalkboard-user"></i> <span
-                    id="liveRoomInstructorTag">Sri Dhanush (Lead Instructor)</span></div>
+                    id="liveRoomInstructorTag">Lead Instructor</span></div>
                 <div class="video-status-mic" id="liveRoomInstructorMicTag"><i class="fa-solid fa-microphone"></i></div>
               </div>
 
@@ -3013,8 +3011,7 @@ function solveExercise() {
           <div>
             <h3 style="font-size: 1.25rem; font-weight: 800; margin-bottom: 0.2rem;">Transaction Audit Log (Supabase
               PostgreSQL)</h3>
-            <span style="font-size: 0.82rem; color: var(--text-muted);" id="walletLedgerSubtitle">Personalized Audit Log
-              for Sri Dhanush — Tiered Hourly Rates Ledger Entries</span>
+            <span style="font-size: 0.82rem; color: var(--text-muted);" id="walletLedgerSubtitle">Personalized Audit Log — Tiered Hourly Rates Ledger Entries</span>
           </div>
           <span class="student-badge" style="background: rgba(16, 185, 129, 0.15); color: #059669; font-weight: 700;">
             <i class="fa-solid fa-lock"></i> User Scoped Ledger
@@ -3254,20 +3251,15 @@ function solveExercise() {
           <img src="" alt="Profile" class="profile-avatar-large" id="profileCardAvatar">
           <div style="flex: 1;">
             <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
-              <h2 style="font-size: 1.5rem; font-weight: 800;" id="profileCardName">Sri Dhanush</h2>
+              <h2 style="font-size: 1.5rem; font-weight: 800;" id="profileCardName">--</h2>
               <span class="student-badge" id="profileCardTopTierBadge"
                 style="background: rgba(245, 158, 11, 0.15); color: #b45309; border-color: rgba(245, 158, 11, 0.4);"><i
                   class="fa-solid fa-medal"></i> 🥇 Elite Master Tutor</span>
               <span class="student-badge" style="background: var(--primary-light); color: var(--primary);"><i
                   class="fa-solid fa-building-columns"></i> Vignan University</span>
             </div>
-            <p style="font-size: 0.88rem; color: var(--text-secondary); margin: 0.4rem 0;" id="profileCardMajor">B.Tech
-              CSE (3rd Year, 1st Sem)</p>
-            <p style="font-size: 0.9rem; color: var(--text-primary); max-width: 780px; line-height: 1.5;"
-              id="profileCardBio">
-              B.Tech CSE student at Vignan. NPTEL Elite+Gold (94%) certified in Python. Passionate about Machine
-              Learning & OOP. Swapping for UI/UX Figma and React frontend.
-            </p>
+            <p style="font-size: 0.88rem; color: var(--text-secondary); margin: 0.4rem 0;" id="profileCardMajor"></p>
+            <p style="font-size: 0.9rem; color: var(--text-primary); max-width: 780px; line-height: 1.5;" id="profileCardBio"></p>
             <div class="profile-badge-row" id="profileBadgeContainer">
               <!-- Populated via JS -->
             </div>
@@ -3278,8 +3270,7 @@ function solveExercise() {
               <span style="color: var(--accent-emerald); font-weight: 700;"><i class="fa-solid fa-database"></i> Stored
                 in Database: <span id="profileCardDbStatus">SQLite / Supabase Synced</span></span>
               <span style="color: var(--text-muted);">|</span>
-              <span><strong>User ID:</strong> <code id="profileCardUserId"
-                  style="font-weight: 700; color: var(--primary);">sri</code></span>
+              <span><strong>User ID:</strong> <code id="profileCardUserId" style="font-weight: 700; color: var(--primary);">--</code></span>
               <span style="color: var(--text-muted);">|</span>
               <span><strong>Total Logins:</strong> <strong id="profileCardLoginCount">1 Login</strong></span>
               <span style="color: var(--text-muted);">|</span>
@@ -3735,8 +3726,7 @@ function solveExercise() {
             <div
               style="background: var(--bg-subtle); padding: 1rem 1.25rem; border-radius: var(--radius-lg); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
               <div>
-                <div style="font-weight: 800; font-size: 0.95rem;">Sri Dhanush (221FA04001) - NPTEL Python Programming &
-                  DSA</div>
+                <div style="font-weight: 800; font-size: 0.95rem;">Verified Academic Credential</div>
                 <div style="font-size: 0.8rem; color: var(--text-muted);">Roll No: NPTEL23CS108S4491028 • Score: Elite +
                   Gold (94%) • Quiz: 95%</div>
               </div>
@@ -5543,7 +5533,7 @@ function solveExercise() {
               Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
             </div>
             <div style="font-size: 0.74rem; color: var(--text-muted); margin-top: 0.35rem;" id="jwtClaimsDisplay">
-              User: Sri Dhanush | Role: MENTOR | ID: sri
+              Authenticated User Audit Record
             </div>
           </div>
 

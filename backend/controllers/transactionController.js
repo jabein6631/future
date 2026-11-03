@@ -16,7 +16,7 @@ const transactionController = {
 
   async getTransactionsByUser(req, res, next) {
     try {
-      const userId = req.params.userId || req.currentUserId || 'sri';
+      const userId = req.params.userId || req.user?.id || req.currentUserId || null;
       const transactions = await supabaseService.getTransactionsByUser(userId);
       res.json({ success: true, transactions });
     } catch (err) {

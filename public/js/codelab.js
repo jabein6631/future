@@ -1153,7 +1153,6 @@ Expected: ${this.escapeHtml(singleResult.expected)} | Got: ${this.escapeHtml(sin
       }
     }
   }
-  }
 
   render() {
     const container = document.getElementById('view-codelab');
