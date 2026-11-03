@@ -95,6 +95,7 @@
       }
 
       this.bindEvents();
+      this.bindPasswordVisibilityToggles();
       this.initEntrancePortal();
       this.initChatRealtimeListener();
       this.bindCreateMasterclassEvents();
@@ -830,11 +831,57 @@
     },
 
     // ==========================================
+    // Password Visibility Toggle Controller
+    // ==========================================
+    bindPasswordVisibilityToggles() {
+      if (window._passwordVisibilityTogglesBound) return;
+      window._passwordVisibilityTogglesBound = true;
+
+      document.addEventListener('click', (e) => {
+        const btn = e.target.closest('.portal-password-toggle-btn');
+        if (!btn) return;
+
+        e.preventDefault();
+        e.stopPropagation();
+
+        const wrapper = btn.closest('.portal-input-wrapper') || btn.closest('.input-icon-wrapper') || btn.parentElement;
+        const targetId = btn.dataset.target;
+        const input = (targetId ? document.getElementById(targetId) : null) || (wrapper ? wrapper.querySelector('input') : null);
+
+        if (!input) return;
+
+        const eyeShow = btn.querySelector('.eye-show');
+        const eyeHide = btn.querySelector('.eye-hide');
+
+        if (input.type === 'password') {
+          input.type = 'text';
+          btn.setAttribute('aria-label', 'Hide password');
+          btn.setAttribute('title', 'Hide password');
+          if (eyeShow) eyeShow.style.display = 'none';
+          if (eyeHide) eyeHide.style.display = 'block';
+        } else {
+          input.type = 'password';
+          btn.setAttribute('aria-label', 'Show password');
+          btn.setAttribute('title', 'Show password');
+          if (eyeShow) eyeShow.style.display = 'block';
+          if (eyeHide) eyeHide.style.display = 'none';
+        }
+
+        try {
+          const valLen = input.value.length;
+          input.focus();
+          input.setSelectionRange(valLen, valLen);
+        } catch (ign) {}
+      });
+    },
+
+    // ==========================================
     // Entrance Login Portal Controller
     // ==========================================
     initEntrancePortal() {
       if (this._entrancePortalInitialized) return;
       this._entrancePortalInitialized = true;
+      this.bindPasswordVisibilityToggles();
 
       // 1. Setup Avatar Preset Images for Quick Login Cards
       const sriAvatar = document.getElementById('portalAvatarSri');
