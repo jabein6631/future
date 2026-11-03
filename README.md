@@ -1,5 +1,6 @@
 # 🎓 SkillSwap — Peer-to-Peer Skill Exchange Platform
 
+> 🚀 **Live Production Deployment**: [https://future-eight-phi.vercel.app](https://future-eight-phi.vercel.app)  
 > **Engineered for Vignan University** by **Sri Dhanush** (B.Tech CSE, 3rd Year).
 > A cashless, time-banking peer skill-swap platform featuring **AI Dynamic 20-Question Qualification Assessments**, **Competitive Negative Marking (+3 / -1 / 0)**, **Verified Certificate Integration (NPTEL / Other Recognized Platform)**, **Review-Driven Ratings**, and **Smart Escrow Credit Contracts**.
 
