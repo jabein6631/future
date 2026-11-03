@@ -4156,27 +4156,26 @@ function solveExercise() {
   <!-- MODAL: VIEW FULL DOUBT & ATTACHMENTS       -->
   <!-- ========================================== -->
   <div class="modal-overlay" id="viewFullDoubtModal">
-    <div class="modal-content" style="max-width: 840px; width: 95vw; max-height: 90vh; display: flex; flex-direction: column; border-radius: 20px; overflow: hidden;">
-      <div class="modal-header" style="padding: 1.25rem 1.5rem 1rem;">
+    <div class="modal-content" style="max-width: 860px; width: 95vw; max-height: 90vh; display: flex; flex-direction: column; border-radius: 20px; overflow: hidden; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);">
+      <div class="modal-header" style="padding: 1.25rem 1.5rem 1rem; flex-shrink: 0; background: var(--bg-card); border-bottom: 1px solid var(--border-subtle); display: flex; justify-content: space-between; align-items: center;">
         <div style="display: flex; align-items: center; gap: 0.75rem;">
           <div
-            style="width: 40px; height: 40px; border-radius: 50%; background: #e0e7ff; color: #4f46e5; display: flex; align-items: center; justify-content: center; font-size: 1.2rem;">
+            style="width: 40px; height: 40px; border-radius: 50%; background: #e0e7ff; color: #4f46e5; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; flex-shrink: 0;">
             <i class="fa-solid fa-headset"></i>
           </div>
           <div>
             <h3 class="modal-title" id="fullDoubtModalTitle"
-              style="font-size: 1.2rem; font-weight: 800; margin: 0; color: var(--text-primary);">Doubt Details</h3>
-            <p id="fullDoubtModalMeta" style="font-size: 0.78rem; color: var(--text-muted); margin: 0.15rem 0 0;">Asked
-              by Student</p>
+              style="font-size: 1.2rem; font-weight: 800; margin: 0; color: var(--text-primary); line-height: 1.3;">Doubt Details</h3>
+            <p id="fullDoubtModalMeta" style="font-size: 0.78rem; color: var(--text-muted); margin: 0.15rem 0 0;">Asked by Student</p>
           </div>
         </div>
-        <div class="modal-close" id="closeFullDoubtModalBtn" style="cursor: pointer;"><i class="fa-solid fa-xmark"></i>
+        <div class="modal-close" id="closeFullDoubtModalBtn" style="cursor: pointer; font-size: 1.25rem; color: var(--text-muted); padding: 0.25rem;"><i class="fa-solid fa-xmark"></i>
         </div>
       </div>
-      <div class="modal-body" id="fullDoubtModalBody" style="padding: 1rem 1.5rem; overflow-y: auto; gap: 1rem;">
+      <div class="modal-body" id="fullDoubtModalBody" style="padding: 1.25rem 1.5rem; overflow-y: auto; flex: 1 1 auto; max-height: calc(90vh - 140px); overscroll-behavior: contain;">
         <!-- Populated dynamically via JS -->
       </div>
-      <div class="modal-footer" style="padding: 0.75rem 1.5rem; border-top: 1px solid var(--border-subtle);">
+      <div class="modal-footer" style="padding: 0.75rem 1.5rem; border-top: 1px solid var(--border-subtle); flex-shrink: 0; background: var(--bg-card); display: flex; justify-content: flex-end;">
         <button type="button" class="btn btn-secondary" id="closeFullDoubtFooterBtn">Close</button>
       </div>
     </div>

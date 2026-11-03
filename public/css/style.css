@@ -3857,6 +3857,114 @@ body.modal-open {
   font-size: 0.78rem;
 }
 
+/* Support Desk Markdown Typography */
+.support-markdown-body {
+  font-size: 0.92rem;
+  line-height: 1.65;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.support-markdown-body .md-h1 {
+  font-size: 1.25rem;
+  font-weight: 800;
+  color: var(--text-primary);
+  margin: 1.1rem 0 0.5rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.support-markdown-body .md-h2 {
+  font-size: 1.12rem;
+  font-weight: 800;
+  color: var(--text-primary);
+  margin: 1rem 0 0.45rem;
+}
+
+.support-markdown-body .md-h3 {
+  font-size: 1.02rem;
+  font-weight: 750;
+  color: var(--text-primary);
+  margin: 0.85rem 0 0.4rem;
+}
+
+.support-markdown-body .md-h4,
+.support-markdown-body .md-h5,
+.support-markdown-body .md-h6 {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0.75rem 0 0.35rem;
+}
+
+.support-markdown-body .md-p {
+  margin: 0 0 0.75rem 0;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.support-markdown-body .md-p:last-child {
+  margin-bottom: 0;
+}
+
+.support-markdown-body .md-ul,
+.support-markdown-body .md-ol {
+  margin: 0.4rem 0 0.85rem 1.4rem;
+  padding: 0;
+  color: var(--text-secondary);
+}
+
+.support-markdown-body .md-li {
+  margin-bottom: 0.35rem;
+  line-height: 1.55;
+}
+
+.support-markdown-body .md-inline-code {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  color: var(--primary);
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-size: 0.82em;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+}
+
+.support-markdown-body .md-code-block-wrapper {
+  margin: 0.75rem 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--bg-subtle);
+}
+
+.support-markdown-body .md-code-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.35rem 0.75rem;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.support-markdown-body .md-blockquote {
+  border-left: 3.5px solid var(--primary);
+  padding: 0.4rem 0.85rem;
+  margin: 0.75rem 0;
+  background: rgba(79, 70, 229, 0.04);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.support-markdown-body .md-hr {
+  border: 0;
+  border-top: 1px solid var(--border-subtle);
+  margin: 1rem 0;
+}
+
 /* Modals Extra Styles */
 .support-modal-notice {
   background: var(--bg-subtle);
