@@ -1491,52 +1491,86 @@ class SkillSwapStore {
   }
 
   async createSupportDoubt({ category, course, skillName, title, description, codeSnippet, issueType, sessionId, attachments, attachmentName, attachmentData }) {
-    const payload = {
-      category: category || skillName || issueType || 'Technical Doubt',
-      course: course || skillName || 'General Engineering',
-      skillName: skillName || category,
-      title,
-      description,
-      codeSnippet,
-      issueType,
-      sessionId,
-      attachments: attachments || [],
-      attachmentName,
-      attachmentData
-    };
-
     const endpoints = [
       `${this.apiBase}/support/doubts`,
       `${this.apiBase}/support/tickets`,
       `${this.apiBase}/tickets`
     ];
 
+    const hasRealFiles = Array.isArray(attachments) && attachments.some(a => a.file instanceof File);
     let lastError = null;
 
     for (const url of endpoints) {
       try {
+        const headers = this.getAuthHeaders();
+        let body = null;
+
+        if (hasRealFiles) {
+          const fd = new FormData();
+          fd.append('category', category || skillName || issueType || 'Technical Doubt');
+          fd.append('course', course || skillName || 'General Engineering');
+          fd.append('skillName', skillName || category || '');
+          fd.append('title', title || '');
+          fd.append('description', description || '');
+          if (codeSnippet) fd.append('codeSnippet', codeSnippet);
+          if (issueType) fd.append('issueType', issueType);
+          if (sessionId) fd.append('sessionId', sessionId);
+
+          attachments.forEach(a => {
+            if (a.file instanceof File) {
+              fd.append('files', a.file, a.name || a.file.name);
+            } else if (a.data) {
+              fd.append('attachments', JSON.stringify({ name: a.name, type: a.type, size: a.size, data: a.data }));
+            }
+          });
+
+          delete headers['Content-Type'];
+          body = fd;
+        } else {
+          const cleanAttachments = (attachments || []).map(a => ({
+            name: a.name || a.file_name,
+            type: a.type || a.file_type,
+            size: a.size || a.file_size,
+            data: a.data || a.file_data
+          }));
+
+          body = JSON.stringify({
+            category: category || skillName || issueType || 'Technical Doubt',
+            course: course || skillName || 'General Engineering',
+            skillName: skillName || category,
+            title,
+            description,
+            codeSnippet,
+            issueType,
+            sessionId,
+            attachments: cleanAttachments,
+            attachmentName,
+            attachmentData
+          });
+        }
+
         const res = await fetch(url, {
           method: 'POST',
-          headers: this.getAuthHeaders(),
-          body: JSON.stringify(payload)
+          headers,
+          body
         });
 
-        const contentType = res.headers.get('content-type') || '';
+        const rawText = await res.text();
         let data = null;
 
-        if (contentType.includes('application/json')) {
-          data = await res.json();
-        } else {
-          const rawText = await res.text();
+        try {
+          data = JSON.parse(rawText);
+        } catch (parseErr) {
+          if (res.status === 413 || rawText.includes('Request Entity Too Large') || rawText.includes('Payload Too Large')) {
+            throw new Error('Attached file exceeds the maximum 5MB serverless upload limit. Please select a file under 5MB.');
+          }
           if (res.status === 404 && url !== endpoints[endpoints.length - 1]) {
-            // Try next candidate endpoint on 404
             continue;
           }
-          throw new Error(
-            !res.ok
-              ? `Server returned HTTP ${res.status}: Unable to submit support ticket. (Expected JSON, received HTML)`
-              : 'Unexpected server response (received HTML instead of JSON). Backend API routing may be misconfigured.'
-          );
+          if (!res.ok) {
+            throw new Error(`Server returned HTTP ${res.status}: Unable to submit support ticket.`);
+          }
+          throw new Error('Unexpected server response: Expected JSON format.');
         }
 
         if (res.status === 404 && url !== endpoints[endpoints.length - 1]) {
@@ -1550,7 +1584,6 @@ class SkillSwapStore {
         return data;
       } catch (err) {
         lastError = err;
-        // If not a 404 endpoint mismatch, don't keep looping
         if (!err.message.includes('404')) {
           throw err;
         }
@@ -1588,21 +1621,66 @@ class SkillSwapStore {
   }
 
   async submitDoubtAnswer(doubtId, { answerText, solution, classification, attachments, attachmentName, attachmentData, recommendedAssessmentSkill, recommendedQuizSkill }) {
-    const res = await fetch(`${this.apiBase}/support/doubts/${doubtId}/answer`, {
-      method: 'POST',
-      headers: this.getAuthHeaders(),
-      body: JSON.stringify({
+    const hasRealFiles = Array.isArray(attachments) && attachments.some(a => a.file instanceof File);
+    const headers = this.getAuthHeaders();
+    let body = null;
+
+    if (hasRealFiles) {
+      const fd = new FormData();
+      fd.append('answerText', answerText || solution || '');
+      fd.append('solution', solution || answerText || '');
+      if (classification) fd.append('classification', classification);
+      if (recommendedAssessmentSkill) fd.append('recommendedAssessmentSkill', recommendedAssessmentSkill);
+      if (recommendedQuizSkill) fd.append('recommendedQuizSkill', recommendedQuizSkill);
+
+      attachments.forEach(a => {
+        if (a.file instanceof File) {
+          fd.append('files', a.file, a.name || a.file.name);
+        }
+      });
+
+      delete headers['Content-Type'];
+      body = fd;
+    } else {
+      const cleanAttachments = (attachments || []).map(a => ({
+        name: a.name || a.file_name,
+        type: a.type || a.file_type,
+        size: a.size || a.file_size,
+        data: a.data || a.file_data
+      }));
+
+      body = JSON.stringify({
         answerText: answerText || solution,
         solution,
         classification,
-        attachments: attachments || [],
+        attachments: cleanAttachments,
         attachmentName,
         attachmentData,
         recommendedAssessmentSkill,
         recommendedQuizSkill
-      })
+      });
+    }
+
+    const res = await fetch(`${this.apiBase}/support/doubts/${doubtId}/answer`, {
+      method: 'POST',
+      headers,
+      body
     });
-    const data = await res.json();
+
+    const rawText = await res.text();
+    let data = null;
+    try {
+      data = JSON.parse(rawText);
+    } catch (parseErr) {
+      if (res.status === 413 || rawText.includes('Request Entity Too Large') || rawText.includes('Payload Too Large')) {
+        throw new Error('Solution attachment exceeds the 5MB upload limit. Please attach a smaller file.');
+      }
+      if (!res.ok) {
+        throw new Error(`Server returned HTTP ${res.status}: Could not submit solution.`);
+      }
+      throw new Error('Unexpected non-JSON response from server.');
+    }
+
     if (!data.success) throw new Error(data.error || 'Could not submit solution');
     await this.fetchWallet();
     return data;

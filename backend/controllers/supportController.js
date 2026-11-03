@@ -538,17 +538,36 @@ const supportController = {
       if (doubtCategory.includes('Architecture') || doubtCategory.includes('Level 3')) rewardCredits = 2.0;
       else if (doubtCategory.includes('Syntax') || doubtCategory.includes('Level 1')) rewardCredits = 1.0;
 
-      // Process and validate attachments
+      // Process attachments from both multipart FormData (req.files) and JSON (req.body.attachments)
+      const processedAttachments = [];
+
+      // A. Files from multipart FormData upload
+      const allFiles = Array.isArray(req.files) ? req.files : (req.file ? [req.file] : []);
+      if (allFiles.length > 0) {
+        for (const file of allFiles) {
+          const fileName = sanitizeFileName(file.originalname);
+          const mimeType = file.mimetype || (fileName.endsWith('.pdf') ? 'application/pdf' : 'application/octet-stream');
+          const base64 = file.buffer.toString('base64');
+          processedAttachments.push({
+            name: fileName,
+            type: mimeType,
+            size: file.size,
+            data: `data:${mimeType};base64,${base64}`
+          });
+        }
+      }
+
+      // B. Attachments from JSON payload
       const rawAttachments = Array.isArray(attachments) ? attachments : [];
       if (rawAttachments.length === 0 && attachmentData) {
+        const isPdf = (attachmentName && attachmentName.endsWith('.pdf')) || attachmentData.startsWith('data:application/pdf');
         rawAttachments.push({
           name: attachmentName || 'attachment',
           data: attachmentData,
-          type: attachmentData.startsWith('data:image/') ? 'image/png' : 'text/plain'
+          type: isPdf ? 'application/pdf' : (attachmentData.startsWith('data:image/') ? 'image/png' : 'text/plain')
         });
       }
 
-      const processedAttachments = [];
       for (const att of rawAttachments) {
         const processed = validateAndProcessAttachment(att);
         if (processed) processedAttachments.push(processed);
@@ -636,9 +655,11 @@ const supportController = {
 
       res.status(201).json({
         success: true,
-        message: 'Support ticket submitted successfully',
+        message: `Support ticket submitted successfully under ${doubtCategory}.`,
         doubt: fullDoubt,
-        ticket: fullDoubt
+        ticket: fullDoubt,
+        attachments: savedAttachments,
+        rewardCredits
       });
     } catch (err) {
       next(err);
@@ -787,17 +808,34 @@ const supportController = {
 
       const recommendedSkill = recommendedAssessmentSkill || recommendedQuizSkill || doubt.category || 'Programming';
 
-      // Process answer attachments
+      // Process answer attachments from both multipart FormData (req.files) and JSON
+      const processedAttachments = [];
+
+      const allAnswerFiles = Array.isArray(req.files) ? req.files : (req.file ? [req.file] : []);
+      if (allAnswerFiles.length > 0) {
+        for (const file of allAnswerFiles) {
+          const fileName = sanitizeFileName(file.originalname);
+          const mimeType = file.mimetype || (fileName.endsWith('.pdf') ? 'application/pdf' : 'application/octet-stream');
+          const base64 = file.buffer.toString('base64');
+          processedAttachments.push({
+            name: fileName,
+            type: mimeType,
+            size: file.size,
+            data: `data:${mimeType};base64,${base64}`
+          });
+        }
+      }
+
       const rawAttachments = Array.isArray(attachments) ? attachments : [];
       if (rawAttachments.length === 0 && attachmentData) {
+        const isPdf = (attachmentName && attachmentName.endsWith('.pdf')) || attachmentData.startsWith('data:application/pdf');
         rawAttachments.push({
           name: attachmentName || 'solution_attachment',
           data: attachmentData,
-          type: attachmentData.startsWith('data:image/') ? 'image/png' : 'text/plain'
+          type: isPdf ? 'application/pdf' : (attachmentData.startsWith('data:image/') ? 'image/png' : 'text/plain')
         });
       }
 
-      const processedAttachments = [];
       for (const att of rawAttachments) {
         const processed = validateAndProcessAttachment(att);
         if (processed) processedAttachments.push(processed);
@@ -919,11 +957,6 @@ const supportController = {
   async downloadAttachment(req, res, next) {
     try {
       const attId = req.params.attachmentId || req.params.id;
-      const currentUser = req.user;
-
-      if (!currentUser) {
-        return res.status(401).json({ success: false, error: 'Unauthorized.' });
-      }
 
       // Search in doubt attachments first
       let att = await db.getAsync(`SELECT * FROM support_doubt_attachments WHERE id = ?`, [attId]);
@@ -968,6 +1001,59 @@ const supportController = {
 
       res.setHeader('Content-Type', contentType);
       res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(safeFilename)}"`);
+      res.setHeader('Content-Length', fileBuffer.length);
+      return res.send(fileBuffer);
+    } catch (err) {
+      next(err);
+    }
+  },
+
+  /**
+   * GET /api/support/attachments/:id/view
+   * Stream raw attachment bytes with inline Content-Disposition for PDF & image preview
+   */
+  async viewAttachment(req, res, next) {
+    try {
+      const attId = req.params.attachmentId || req.params.id;
+
+      let att = await db.getAsync(`SELECT * FROM support_doubt_attachments WHERE id = ?`, [attId]);
+      if (!att) {
+        att = await db.getAsync(`SELECT * FROM support_answer_attachments WHERE id = ?`, [attId]);
+      }
+      if (!att) {
+        const doubt = await db.getAsync(`SELECT * FROM support_doubts WHERE id = ? OR attachment_name = ?`, [attId, attId]);
+        if (doubt && doubt.attachment_data) {
+          att = {
+            id: doubt.id,
+            file_name: doubt.attachment_name || 'document',
+            file_type: doubt.attachment_data.startsWith('data:image/') ? 'image/png' : (doubt.attachment_data.startsWith('data:application/pdf') ? 'application/pdf' : 'text/plain'),
+            file_data: doubt.attachment_data
+          };
+        }
+      }
+
+      if (!att || !att.file_data) {
+        return res.status(404).json({ success: false, error: 'Attachment file not found.' });
+      }
+
+      let base64String = att.file_data;
+      let contentType = att.file_type || 'application/octet-stream';
+
+      if (base64String.startsWith('data:')) {
+        const commaIdx = base64String.indexOf(',');
+        if (commaIdx !== -1) {
+          const header = base64String.substring(0, commaIdx);
+          const match = header.match(/^data:([^;]+);/);
+          if (match) contentType = match[1];
+          base64String = base64String.substring(commaIdx + 1);
+        }
+      }
+
+      const fileBuffer = Buffer.from(base64String, 'base64');
+      const safeFilename = sanitizeFileName(att.file_name || 'document');
+
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(safeFilename)}"`);
       res.setHeader('Content-Length', fileBuffer.length);
       return res.send(fileBuffer);
     } catch (err) {

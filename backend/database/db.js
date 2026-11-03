@@ -38,11 +38,24 @@ if (!isTurso) {
   }
 }
 
+async function executeTursoWithRetry(fn, maxRetries = 2) {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt === maxRetries || (err.message && err.message.includes('duplicate column name'))) {
+        throw err;
+      }
+      await new Promise(r => setTimeout(r, 200 * (attempt + 1)));
+    }
+  }
+}
+
 const db = {};
 
 db.runAsync = function (sql, params = []) {
   if (isTurso && tursoClient) {
-    return tursoClient.execute({ sql, args: params }).then((res) => ({
+    return executeTursoWithRetry(() => tursoClient.execute({ sql, args: params })).then((res) => ({
       lastID: res.lastInsertRowid !== undefined ? Number(res.lastInsertRowid) : undefined,
       changes: res.rowsAffected
     })).catch((err) => {
@@ -65,7 +78,7 @@ db.runAsync = function (sql, params = []) {
 
 db.getAsync = function (sql, params = []) {
   if (isTurso && tursoClient) {
-    return tursoClient.execute({ sql, args: params }).then((res) => {
+    return executeTursoWithRetry(() => tursoClient.execute({ sql, args: params })).then((res) => {
       if (!res.rows || res.rows.length === 0) return null;
       return res.rows[0];
     }).catch((err) => {
@@ -84,7 +97,7 @@ db.getAsync = function (sql, params = []) {
 
 db.allAsync = function (sql, params = []) {
   if (isTurso && tursoClient) {
-    return tursoClient.execute({ sql, args: params }).then((res) => res.rows || [])
+    return executeTursoWithRetry(() => tursoClient.execute({ sql, args: params })).then((res) => res.rows || [])
       .catch((err) => {
         console.error('⚠️ [Turso Query Error in allAsync]:', err.message);
         return [];

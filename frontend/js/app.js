@@ -5858,7 +5858,8 @@
               size: file.size,
               file_size: file.size,
               type: file.type || 'application/octet-stream',
-              file_type: file.type || 'application/octet-stream'
+              file_type: file.type || 'application/octet-stream',
+              file: file
             });
             this.renderDoubtUploadedFiles();
           };
@@ -6009,7 +6010,8 @@
               size: file.size,
               file_size: file.size,
               type: file.type || 'application/octet-stream',
-              file_type: file.type || 'application/octet-stream'
+              file_type: file.type || 'application/octet-stream',
+              file: file
             });
             this.renderAnswerUploadedFiles();
           };
@@ -7127,6 +7129,12 @@
           modal.style.zIndex = '';
           const modalId = modal.id || modalOrId;
           this.modalStack = this.modalStack.filter(id => id !== modalId);
+          if (modalId === 'filePreviewModal' && this._activePreviewBlobUrl) {
+            try {
+              URL.revokeObjectURL(this._activePreviewBlobUrl);
+            } catch (e) {}
+            this._activePreviewBlobUrl = null;
+          }
           if (modalId === 'addSkillModal') {
             try {
               if (window.location.pathname === '/add-subject' && typeof history !== 'undefined' && history.pushState) {
@@ -8273,7 +8281,7 @@
           </div>
         `;
       }).join('');
-    }
+    },
 
     async handleNotificationClick(id, targetPage) {
       if (id && window.store && typeof window.store.markNotificationRead === 'function') {
@@ -11024,6 +11032,1460 @@
         console.warn('Chat realtime listener init error:', err);
       }
     }
+,
+
+
+    async renderPdfViewer(att, bodyEl, downloadBtn) {
+      if (!bodyEl) return;
+
+      const fileName = att.file_name || att.name || 'document.pdf';
+      const fileData = att.file_data || att.data || '';
+      const fileObj = att.file || null;
+
+      // Revoke any previous active blob URL to prevent memory leaks
+      if (this._activePreviewBlobUrl) {
+        try {
+          URL.revokeObjectURL(this._activePreviewBlobUrl);
+        } catch (e) {}
+        this._activePreviewBlobUrl = null;
+      }
+
+      // Render modern PDF container with responsive toolbar and scrollable canvas viewport
+      bodyEl.innerHTML = `
+        <div class="pdf-viewer-shell" style="width: 100%; height: 65vh; display: flex; flex-direction: column; border-radius: 8px; overflow: hidden; background: #2b3035; box-shadow: 0 4px 14px rgba(0,0,0,0.25);">
+          <!-- Top PDF Toolbar -->
+          <div class="pdf-toolbar" style="display: flex; align-items: center; justify-content: space-between; padding: 0.6rem 1rem; background: #1c1f22; color: #f1f5f9; font-size: 0.85rem; border-bottom: 1px solid rgba(255,255,255,0.08); user-select: none; flex-shrink: 0; flex-wrap: wrap; gap: 0.5rem;">
+            <div style="display: flex; align-items: center; gap: 0.6rem;">
+              <span style="font-weight: 700; display: inline-flex; align-items: center; gap: 0.4rem; color: #f8fafc;">
+                <i class="fa-solid fa-file-pdf" style="color: #ef4444; font-size: 1rem;"></i>
+                <span>Page <span id="pdfCurrentPageNum" style="color: #38bdf8;">1</span> of <span id="pdfTotalPageCount">--</span></span>
+              </span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 0.4rem;">
+              <button type="button" id="pdfZoomOutBtn" class="btn btn-secondary btn-sm" style="padding: 0.25rem 0.6rem; font-size: 0.75rem; background: #33393f; color: #fff; border: 1px solid #4b5563; border-radius: 4px; cursor: pointer;" title="Zoom Out">
+                <i class="fa-solid fa-minus"></i>
+              </button>
+              <span id="pdfZoomPercent" style="min-width: 52px; text-align: center; font-weight: 700; font-size: 0.78rem; color: #cbd5e1;">100%</span>
+              <button type="button" id="pdfZoomInBtn" class="btn btn-secondary btn-sm" style="padding: 0.25rem 0.6rem; font-size: 0.75rem; background: #33393f; color: #fff; border: 1px solid #4b5563; border-radius: 4px; cursor: pointer;" title="Zoom In">
+                <i class="fa-solid fa-plus"></i>
+              </button>
+              <button type="button" id="pdfFitWidthBtn" class="btn btn-secondary btn-sm" style="padding: 0.25rem 0.7rem; font-size: 0.75rem; background: #33393f; color: #fff; border: 1px solid #4b5563; border-radius: 4px; cursor: pointer; margin-left: 0.35rem;" title="Fit to Container Width">
+                <i class="fa-solid fa-arrows-left-right"></i> Fit Width
+              </button>
+            </div>
+          </div>
+
+          <!-- Continuous Vertical Scrollable Viewport -->
+          <div id="pdfViewport" style="flex: 1; overflow-y: auto; overflow-x: auto; padding: 1.5rem; display: flex; flex-direction: column; align-items: center; gap: 1.25rem; background: #525659; position: relative;">
+            <div id="pdfLoadingSpinner" style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 3.5rem 1rem; color: #f8fafc; gap: 0.85rem;">
+              <i class="fa-solid fa-circle-notch fa-spin" style="font-size: 2.25rem; color: #6366f1;"></i>
+              <span style="font-size: 0.95rem; font-weight: 600; letter-spacing: 0.02em;">Loading PDF document...</span>
+            </div>
+          </div>
+        </div>
+      `;
+
+      try {
+        let pdfData = null;
+        let blobUrl = null;
+
+        // Resolve binary data
+        if (fileObj instanceof Blob || fileObj instanceof File) {
+          const buffer = await fileObj.arrayBuffer();
+          pdfData = new Uint8Array(buffer);
+          blobUrl = URL.createObjectURL(fileObj);
+        } else if (typeof fileData === 'string' && fileData.startsWith('data:')) {
+          const base64Str = fileData.split(',')[1] || '';
+          const binary = atob(base64Str);
+          const len = binary.length;
+          pdfData = new Uint8Array(len);
+          for (let i = 0; i < len; i++) {
+            pdfData[i] = binary.charCodeAt(i);
+          }
+          const blob = new Blob([pdfData], { type: 'application/pdf' });
+          blobUrl = URL.createObjectURL(blob);
+        } else if (typeof fileData === 'string' && (fileData.startsWith('/') || fileData.startsWith('http'))) {
+          blobUrl = fileData;
+          try {
+            const res = await fetch(fileData);
+            if (res.ok) {
+              const buffer = await res.arrayBuffer();
+              pdfData = new Uint8Array(buffer);
+            }
+          } catch (e) {
+            console.warn('Direct fetch of PDF attachment failed, fallback to URL:', e);
+          }
+        }
+
+        if (blobUrl) {
+          this._activePreviewBlobUrl = blobUrl;
+          if (downloadBtn) {
+            downloadBtn.onclick = () => {
+              const a = document.createElement('a');
+              a.href = blobUrl;
+              a.download = fileName;
+              document.body.appendChild(a);
+              a.click();
+              a.remove();
+            };
+          }
+        }
+
+        // Initialize PDF.js
+        const pdfjs = window.pdfjsLib || window['pdfjs-dist/build/pdf'];
+        if (!pdfjs) {
+          throw new Error('PDF rendering engine (PDF.js) not available');
+        }
+
+        // Configure worker if needed
+        if (!pdfjs.GlobalWorkerOptions?.workerSrc) {
+          pdfjs.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        }
+
+        const loadingTask = pdfjs.getDocument(pdfData ? { data: pdfData } : (blobUrl || fileData));
+        const pdf = await loadingTask.promise;
+        const numPages = pdf.numPages;
+
+        const totalCountEl = document.getElementById('pdfTotalPageCount');
+        if (totalCountEl) totalCountEl.textContent = numPages;
+
+        const spinner = document.getElementById('pdfLoadingSpinner');
+        if (spinner) spinner.style.display = 'none';
+
+        let currentScale = 1.0;
+        let isFitWidth = false;
+
+        const viewportContainer = document.getElementById('pdfViewport');
+
+        const renderPages = async () => {
+          if (!viewportContainer) return;
+          viewportContainer.innerHTML = '';
+
+          const availWidth = Math.max(300, viewportContainer.clientWidth - 48);
+
+          for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+            const page = await pdf.getPage(pageNum);
+            const unscaledViewport = page.getViewport({ scale: 1.0 });
+
+            let scale = currentScale;
+            if (isFitWidth && availWidth > 0 && unscaledViewport.width > 0) {
+              scale = availWidth / unscaledViewport.width;
+            }
+
+            const viewport = page.getViewport({ scale });
+            const outputScale = window.devicePixelRatio || 1;
+
+            const pageWrapper = document.createElement('div');
+            pageWrapper.className = 'pdf-page-wrapper';
+            pageWrapper.dataset.pageNum = pageNum;
+            pageWrapper.style.cssText = 'position: relative; box-shadow: 0 4px 14px rgba(0,0,0,0.32); background: #ffffff; border-radius: 4px; overflow: hidden; margin-bottom: 0.5rem; flex-shrink: 0;';
+
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.floor(viewport.width * outputScale);
+            canvas.height = Math.floor(viewport.height * outputScale);
+            canvas.style.width = Math.floor(viewport.width) + 'px';
+            canvas.style.height = Math.floor(viewport.height) + 'px';
+            canvas.style.display = 'block';
+
+            const ctx = canvas.getContext('2d');
+            const transform = outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : null;
+
+            pageWrapper.appendChild(canvas);
+            viewportContainer.appendChild(pageWrapper);
+
+            await page.render({
+              canvasContext: ctx,
+              viewport: viewport,
+              transform: transform
+            }).promise;
+          }
+        };
+
+        await renderPages();
+
+        // Dynamic page counter tracking on scroll
+        const pageIndicator = document.getElementById('pdfCurrentPageNum');
+        if (viewportContainer && pageIndicator) {
+          viewportContainer.addEventListener('scroll', () => {
+            const pages = viewportContainer.querySelectorAll('.pdf-page-wrapper');
+            const containerTop = viewportContainer.scrollTop;
+            for (let p of pages) {
+              const pTop = p.offsetTop - viewportContainer.offsetTop;
+              const pHeight = p.offsetHeight;
+              if (containerTop >= pTop - pHeight / 2 && containerTop < pTop + pHeight / 2) {
+                pageIndicator.textContent = p.dataset.pageNum;
+                break;
+              }
+            }
+          });
+        }
+
+        // Zoom In listener
+        document.getElementById('pdfZoomInBtn')?.addEventListener('click', async () => {
+          isFitWidth = false;
+          currentScale = Math.min(3.0, +(currentScale + 0.25).toFixed(2));
+          const zoomLabel = document.getElementById('pdfZoomPercent');
+          if (zoomLabel) zoomLabel.textContent = Math.round(currentScale * 100) + '%';
+          await renderPages();
+        });
+
+        // Zoom Out listener
+        document.getElementById('pdfZoomOutBtn')?.addEventListener('click', async () => {
+          isFitWidth = false;
+          currentScale = Math.max(0.5, +(currentScale - 0.25).toFixed(2));
+          const zoomLabel = document.getElementById('pdfZoomPercent');
+          if (zoomLabel) zoomLabel.textContent = Math.round(currentScale * 100) + '%';
+          await renderPages();
+        });
+
+        // Fit Width listener
+        document.getElementById('pdfFitWidthBtn')?.addEventListener('click', async () => {
+          isFitWidth = true;
+          if (viewportContainer && pdf) {
+            const page1 = await pdf.getPage(1);
+            const unscaled = page1.getViewport({ scale: 1.0 });
+            const availWidth = Math.max(300, viewportContainer.clientWidth - 48);
+            if (availWidth > 0 && unscaled.width > 0) {
+              currentScale = +(availWidth / unscaled.width).toFixed(2);
+              const zoomLabel = document.getElementById('pdfZoomPercent');
+              if (zoomLabel) zoomLabel.textContent = Math.round(currentScale * 100) + '%';
+            }
+          }
+          await renderPages();
+        });
+
+      } catch (err) {
+        console.warn('PDF.js rendering failed, attempting fallback or displaying error:', err);
+        // Fallback: If blobUrl is available, try iframe viewer first; otherwise show meaningful error state
+        if (bodyEl) {
+          bodyEl.innerHTML = `
+            <div style="text-align: center; padding: 2.5rem; background: var(--bg-card); border-radius: 8px; border: 1px solid var(--border-medium); max-width: 480px; box-shadow: 0 4px 12px rgba(0,0,0,0.08);">
+              <i class="fa-solid fa-triangle-exclamation" style="font-size: 2.5rem; color: #f59e0b; margin-bottom: 0.85rem;"></i>
+              <h4 style="font-weight: 700; color: var(--text-primary); margin-bottom: 0.5rem;">Unable to Preview PDF Inline</h4>
+              <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1.25rem;">
+                This PDF document could not be rendered inline (it may be encrypted, corrupted, or blocked by browser settings). You can still download the file to view it directly on your device.
+              </p>
+              <a href="${this._activePreviewBlobUrl || fileData}" download="${this.escapeHtml(fileName)}" class="btn btn-primary btn-sm" style="padding: 0.5rem 1rem;">
+                <i class="fa-solid fa-download"></i> Download ${this.escapeHtml(fileName)}
+              </a>
+            </div>
+          `;
+        }
+      }
+    },
+
+    formatBytes(bytes) {
+      if (!bytes || bytes === 0) return '0 Bytes';
+      const k = 1024;
+      const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    },
+
+    getFileIconInfo(filename = '', fileType = '') {
+      const ext = (filename || '').split('.').pop()?.toLowerCase() || '';
+      const type = (fileType || '').toLowerCase();
+
+      if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg'].includes(ext) || type.startsWith('image/')) {
+        return { icon: 'fa-solid fa-image', color: '#6366f1', isImg: true, isCode: false, isPdf: false, isText: false, label: 'Image', ext: ext.toUpperCase() || 'PNG' };
+      }
+      if (ext === 'pdf' || type.includes('pdf')) {
+        return { icon: 'fa-solid fa-file-pdf', color: '#ef4444', isImg: false, isCode: false, isPdf: true, isText: false, label: 'PDF Document', ext: 'PDF' };
+      }
+      if (['py', 'python'].includes(ext)) {
+        return { icon: 'fa-brands fa-python', color: '#3b82f6', isImg: false, isCode: true, isPdf: false, isText: false, label: 'Python Code', ext: 'PY' };
+      }
+      if (['js', 'jsx', 'javascript'].includes(ext)) {
+        return { icon: 'fa-brands fa-js', color: '#eab308', isImg: false, isCode: true, isPdf: false, isText: false, label: 'JavaScript Code', ext: 'JS' };
+      }
+      if (['ts', 'tsx', 'typescript'].includes(ext)) {
+        return { icon: 'fa-solid fa-code', color: '#3b82f6', isImg: false, isCode: true, isPdf: false, isText: false, label: 'TypeScript Code', ext: 'TS' };
+      }
+      if (['java'].includes(ext)) {
+        return { icon: 'fa-brands fa-java', color: '#f97316', isImg: false, isCode: true, isPdf: false, isText: false, label: 'Java Code', ext: 'JAVA' };
+      }
+      if (['c', 'cpp', 'h', 'hpp'].includes(ext)) {
+        return { icon: 'fa-solid fa-file-code', color: '#64748b', isImg: false, isCode: true, isPdf: false, isText: false, label: 'C/C++ Code', ext: 'CPP' };
+      }
+      if (['html', 'htm'].includes(ext)) {
+        return { icon: 'fa-brands fa-html5', color: '#f97316', isImg: false, isCode: true, isPdf: false, isText: false, label: 'HTML', ext: 'HTML' };
+      }
+      if (['css', 'scss'].includes(ext)) {
+        return { icon: 'fa-brands fa-css3-alt', color: '#3b82f6', isImg: false, isCode: true, isPdf: false, isText: false, label: 'CSS', ext: 'CSS' };
+      }
+      if (['sql'].includes(ext)) {
+        return { icon: 'fa-solid fa-database', color: '#8b5cf6', isImg: false, isCode: true, isPdf: false, isText: false, label: 'SQL Query', ext: 'SQL' };
+      }
+      if (['json'].includes(ext)) {
+        return { icon: 'fa-solid fa-brackets-curly', color: '#10b981', isImg: false, isCode: true, isPdf: false, isText: false, label: 'JSON Data', ext: 'JSON' };
+      }
+      return { icon: 'fa-solid fa-file-lines', color: '#6366f1', isImg: false, isCode: false, isPdf: false, isText: true, label: 'Text File', ext: ext.toUpperCase() || 'TXT' };
+    },
+
+    renderDoubtUploadedFiles() {
+      const container = document.getElementById('supportUploadedFilesContainer');
+      const list = document.getElementById('supportUploadedFilesList');
+      const countEl = document.getElementById('supportUploadedCount');
+
+      if (!container || !list) return;
+
+      const files = this.doubtAttachments || [];
+      if (countEl) countEl.textContent = files.length;
+
+      if (files.length === 0) {
+        container.style.display = 'none';
+        list.innerHTML = '';
+        return;
+      }
+
+      container.style.display = 'block';
+      list.innerHTML = files.map((att, idx) => {
+        const info = this.getFileIconInfo(att.name || att.file_name, att.type || att.file_type);
+        const name = this.escapeHtml(att.name || att.file_name || 'attachment');
+        const sizeStr = this.formatBytes(att.size || att.file_size);
+        const previewBtnLabel = info.isCode ? '<i class="fa-solid fa-code"></i> View Code' : '<i class="fa-regular fa-eye"></i> Preview';
+
+        return `
+          <div class="uploaded-file-card" style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 0.75rem 1rem; display: flex; align-items: center; justify-content: space-between; gap: 0.85rem; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+            <div style="display: flex; align-items: center; gap: 0.75rem; overflow: hidden; flex: 1;">
+              ${info.isImg && (att.data || att.file_data) ? `
+                <img src="${att.data || att.file_data}" alt="${name}" style="width: 46px; height: 46px; border-radius: 6px; object-fit: cover; border: 1px solid var(--border-medium); flex-shrink: 0;">
+              ` : `
+                <div style="width: 46px; height: 46px; border-radius: 6px; background: rgba(99, 102, 241, 0.1); color: ${info.color}; display: flex; align-items: center; justify-content: center; font-size: 1.35rem; flex-shrink: 0;">
+                  <i class="${info.icon}"></i>
+                </div>
+              `}
+              <div style="overflow: hidden; text-align: left; flex: 1;">
+                <div style="display: flex; align-items: center; gap: 0.4rem;">
+                  <span style="font-weight: 700; font-size: 0.85rem; color: var(--text-primary); text-overflow: ellipsis; white-space: nowrap; overflow: hidden;" title="${name}">${name}</span>
+                  <i class="fa-solid fa-circle-check" style="color: #10b981; font-size: 0.85rem;" title="File verified & ready"></i>
+                </div>
+                <div style="font-size: 0.74rem; color: var(--text-muted); margin-top: 0.15rem;">
+                  <span style="font-weight: 700; color: var(--text-secondary);">${info.ext}</span> • ${sizeStr}
+                </div>
+              </div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 0.4rem; flex-shrink: 0;">
+              <button type="button" class="btn btn-secondary btn-sm file-card-action-btn" onclick="window.app.previewLocalDoubtAttachment(${idx})" style="font-size: 0.75rem; padding: 0.3rem 0.6rem;">
+                ${previewBtnLabel}
+              </button>
+              <button type="button" class="btn btn-secondary btn-sm file-card-action-btn" onclick="window.app.downloadLocalAttachment('doubt', ${idx})" style="font-size: 0.75rem; padding: 0.3rem 0.6rem;" title="Download File">
+                <i class="fa-solid fa-download"></i> Download
+              </button>
+              <button type="button" class="btn btn-secondary btn-sm file-card-action-btn" onclick="window.app.removeDoubtAttachment(${idx})" style="font-size: 0.75rem; padding: 0.3rem 0.55rem; color: var(--accent-rose);" title="Remove File">
+                <i class="fa-solid fa-trash-can"></i>
+              </button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    },
+
+    renderAnswerUploadedFiles() {
+      const container = document.getElementById('resolveAnswerUploadedContainer');
+      const list = document.getElementById('resolveAnswerUploadedList');
+      const countEl = document.getElementById('resolveAnswerUploadedCount');
+
+      if (!container || !list) return;
+
+      const files = this.answerAttachments || [];
+      if (countEl) countEl.textContent = files.length;
+
+      if (files.length === 0) {
+        container.style.display = 'none';
+        list.innerHTML = '';
+        return;
+      }
+
+      container.style.display = 'block';
+      list.innerHTML = files.map((att, idx) => {
+        const info = this.getFileIconInfo(att.name || att.file_name, att.type || att.file_type);
+        const name = this.escapeHtml(att.name || att.file_name || 'solution_attachment');
+        const sizeStr = this.formatBytes(att.size || att.file_size);
+        const previewBtnLabel = info.isCode ? '<i class="fa-solid fa-code"></i> View Code' : '<i class="fa-regular fa-eye"></i> Preview';
+
+        return `
+          <div class="uploaded-file-card" style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 0.75rem 0.9rem; display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+            <div style="display: flex; align-items: center; gap: 0.65rem; overflow: hidden; flex: 1;">
+              ${info.isImg && (att.data || att.file_data) ? `
+                <img src="${att.data || att.file_data}" alt="${name}" style="width: 42px; height: 42px; border-radius: 6px; object-fit: cover; border: 1px solid var(--border-medium); flex-shrink: 0;">
+              ` : `
+                <div style="width: 42px; height: 42px; border-radius: 6px; background: rgba(16, 185, 129, 0.1); color: ${info.color}; display: flex; align-items: center; justify-content: center; font-size: 1.25rem; flex-shrink: 0;">
+                  <i class="${info.icon}"></i>
+                </div>
+              `}
+              <div style="overflow: hidden; text-align: left; flex: 1;">
+                <div style="display: flex; align-items: center; gap: 0.35rem;">
+                  <span style="font-weight: 700; font-size: 0.83rem; color: var(--text-primary); text-overflow: ellipsis; white-space: nowrap; overflow: hidden;" title="${name}">${name}</span>
+                  <i class="fa-solid fa-circle-check" style="color: #10b981; font-size: 0.8rem;"></i>
+                </div>
+                <div style="font-size: 0.72rem; color: var(--text-muted); margin-top: 0.15rem;">
+                  <span style="font-weight: 700; color: var(--text-secondary);">${info.ext}</span> • ${sizeStr}
+                </div>
+              </div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 0.35rem; flex-shrink: 0;">
+              <button type="button" class="btn btn-secondary btn-sm file-card-action-btn" onclick="window.app.previewLocalAnswerAttachment(${idx})" style="font-size: 0.72rem; padding: 0.25rem 0.55rem;">
+                ${previewBtnLabel}
+              </button>
+              <button type="button" class="btn btn-secondary btn-sm file-card-action-btn" onclick="window.app.downloadLocalAttachment('answer', ${idx})" style="font-size: 0.72rem; padding: 0.25rem 0.55rem;" title="Download">
+                <i class="fa-solid fa-download"></i>
+              </button>
+              <button type="button" class="btn btn-secondary btn-sm file-card-action-btn" onclick="window.app.removeAnswerAttachment(${idx})" style="font-size: 0.72rem; padding: 0.25rem 0.5rem; color: var(--accent-rose);" title="Remove">
+                <i class="fa-solid fa-trash-can"></i>
+              </button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    },
+
+    removeDoubtAttachment(index) {
+      if (this.doubtAttachments && this.doubtAttachments[index]) {
+        this.doubtAttachments.splice(index, 1);
+        this.renderDoubtUploadedFiles();
+      }
+    },
+
+    removeAnswerAttachment(index) {
+      if (this.answerAttachments && this.answerAttachments[index]) {
+        this.answerAttachments.splice(index, 1);
+        this.renderAnswerUploadedFiles();
+      }
+    },
+
+    previewLocalDoubtAttachment(index) {
+      const att = this.doubtAttachments?.[index];
+      if (att) this.openFilePreview(att);
+    },
+
+    previewLocalAnswerAttachment(index) {
+      const att = this.answerAttachments?.[index];
+      if (att) this.openFilePreview(att);
+    },
+
+        downloadLocalAttachment(type, index) {
+      const list = type === 'answer' ? this.answerAttachments : this.doubtAttachments;
+      const att = list && list[index];
+      if (!att) return;
+      const fileName = att.name || att.file_name || 'attachment';
+      const fileData = att.data || att.file_data;
+      if (att.file instanceof Blob || att.file instanceof File) {
+        const url = URL.createObjectURL(att.file);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+      } else if (fileData) {
+        const a = document.createElement('a');
+        a.href = fileData;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }
+    },
+
+    /**
+     * Universal File Preview Modal (Image Lightbox, PDF Viewer, Monospace Code Viewer with Copy & Download)
+     */
+    openFilePreview(att) {
+      if (!att) return;
+
+      const fileName = att.file_name || att.name || 'attachment';
+      const fileData = att.file_data || att.data || '';
+      const fileType = att.file_type || att.type || '';
+      const fileSize = att.file_size || att.size || (fileData ? fileData.length : 0);
+
+      const info = this.getFileIconInfo(fileName, fileType);
+
+      const iconEl = document.getElementById('previewModalFileIcon');
+      if (iconEl) {
+        iconEl.className = info.icon;
+        iconEl.style.color = info.color;
+      }
+
+      const nameEl = document.getElementById('previewModalFileName');
+      if (nameEl) nameEl.textContent = fileName;
+
+      const metaEl = document.getElementById('previewModalFileMeta');
+      if (metaEl) metaEl.textContent = `${info.label} (${info.ext}) • ${this.formatBytes(fileSize)}`;
+
+      const copyBtn = document.getElementById('previewModalCopyCodeBtn');
+      const downloadBtn = document.getElementById('previewModalDownloadBtn');
+      const bodyEl = document.getElementById('previewModalBody');
+
+      this.currentPreviewCode = null;
+
+      if (downloadBtn) {
+        downloadBtn.onclick = () => {
+          if (att.id && !att.id.startsWith('local_')) {
+            window.store.downloadAttachment(att.id, fileName).catch(() => {
+              const a = document.createElement('a');
+              a.href = fileData;
+              a.download = fileName;
+              document.body.appendChild(a);
+              a.click();
+              a.remove();
+            });
+          } else {
+            const a = document.createElement('a');
+            a.href = fileData;
+            a.download = fileName;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+          }
+        };
+      }
+
+      if (info.isImg) {
+        if (copyBtn) copyBtn.style.display = 'none';
+        if (bodyEl) {
+          bodyEl.innerHTML = `
+            <div style="text-align: center; max-width: 100%; max-height: 100%;">
+              <img src="${fileData}" alt="${this.escapeHtml(fileName)}" style="max-width: 100%; max-height: 60vh; border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,0.15); object-fit: contain;">
+            </div>
+          `;
+        }
+      } else if (info.isPdf) {
+        if (copyBtn) copyBtn.style.display = 'none';
+        this.renderPdfViewer(att, bodyEl, downloadBtn);
+      } else {
+        // Code / Text
+        let textContent = fileData;
+        if (fileData.startsWith('data:')) {
+          try {
+            const base64Str = fileData.split(',')[1];
+            textContent = decodeURIComponent(escape(atob(base64Str)));
+          } catch (e) {
+            try {
+              textContent = atob(fileData.split(',')[1]);
+            } catch (err) {
+              textContent = fileData;
+            }
+          }
+        }
+
+        this.currentPreviewCode = textContent;
+        if (copyBtn) copyBtn.style.display = 'inline-flex';
+
+        const lines = textContent.split('\n');
+        const formattedCode = lines.map((line, lIdx) => {
+          return `<div style="display: flex; gap: 1rem;"><span style="color: #64748b; user-select: none; width: 30px; text-align: right; flex-shrink: 0;">${lIdx + 1}</span><span style="flex: 1; white-space: pre-wrap; word-break: break-all;">${this.escapeHtml(line) || ' '}</span></div>`;
+        }).join('');
+
+        if (bodyEl) {
+          bodyEl.innerHTML = `
+            <div style="width: 100%; text-align: left; background: #0f172a; color: #f8fafc; border-radius: 8px; padding: 1rem; font-family: 'Fira Code', monospace, Consolas; font-size: 0.85rem; line-height: 1.5; overflow-x: auto; max-height: 60vh;">
+              ${formattedCode}
+            </div>
+          `;
+        }
+      }
+
+      this.openModal('filePreviewModal');
+    },
+
+    /**
+     * View Full Doubt Modal
+     */
+    openViewFullDoubtModal(doubtId) {
+      const doubt = (this.supportTickets || []).find(d => d.id === doubtId);
+      if (!doubt) return;
+
+      const titleEl = document.getElementById('fullDoubtModalTitle');
+      if (titleEl) titleEl.textContent = doubt.title;
+
+      const authorName = doubt.raised_by_name || doubt.student_name || 'Student';
+      const categoryLabel = doubt.category || doubt.course || doubt.skill_name || 'Technical Doubt';
+      const metaEl = document.getElementById('fullDoubtModalMeta');
+      if (metaEl) {
+        metaEl.textContent = `Asked by ${authorName} • ${categoryLabel} • Status: ${doubt.status}`;
+      }
+
+      const bodyEl = document.getElementById('fullDoubtModalBody');
+      if (!bodyEl) return;
+
+      const attachments = doubt.attachments || [];
+      const answers = doubt.answers || [];
+      const primaryAnswer = answers[0] || null;
+      const answerAttachments = doubt.answer_attachments || primaryAnswer?.attachments || [];
+
+      let attsHtml = '';
+      if (attachments.length > 0) {
+        attsHtml = `
+          <div style="margin-top: 0.85rem;">
+            <div style="font-weight: 700; font-size: 0.85rem; color: var(--text-primary); margin-bottom: 0.4rem;">
+              📎 Student Attached Files (${attachments.length})
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0.5rem;">
+              ${attachments.map((att, aIdx) => {
+          const info = this.getFileIconInfo(att.file_name || att.name, att.file_type || att.type);
+          const safeName = this.escapeHtml(att.file_name || att.name || 'attachment');
+          const sizeStr = this.formatBytes(att.file_size || att.size);
+          return `
+                  <div style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 0.65rem 0.85rem; display: flex; align-items: center; justify-content: space-between; gap: 0.65rem;">
+                    <div style="display: flex; align-items: center; gap: 0.6rem; overflow: hidden; flex: 1;">
+                      <i class="${info.icon}" style="color: ${info.color}; font-size: 1.25rem; flex-shrink: 0;"></i>
+                      <div style="overflow: hidden; text-align: left;">
+                        <div style="font-weight: 700; font-size: 0.82rem; color: var(--text-primary); text-overflow: ellipsis; white-space: nowrap; overflow: hidden;">${safeName}</div>
+                        <div style="font-size: 0.7rem; color: var(--text-muted);">${info.ext} • ${sizeStr}</div>
+                      </div>
+                    </div>
+                    <div style="display: flex; gap: 0.35rem; flex-shrink: 0;">
+                      <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.previewDoubtAttachmentById('${doubt.id}', ${aIdx})" style="font-size: 0.72rem; padding: 0.25rem 0.5rem;">
+                        ${info.isCode ? 'View Code' : 'Preview'}
+                      </button>
+                      <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.downloadDoubtAttachmentById('${doubt.id}', ${aIdx})" style="font-size: 0.72rem; padding: 0.25rem 0.5rem;">
+                        <i class="fa-solid fa-download"></i>
+                      </button>
+                    </div>
+                  </div>
+                `;
+        }).join('')}
+            </div>
+          </div>
+        `;
+      }
+
+      let answerHtml = '';
+      if (doubt.status === 'RESOLVED' && (primaryAnswer || doubt.mentor_solution)) {
+        const solverName = primaryAnswer?.answered_by_name || doubt.accepted_by_name || doubt.support_mentor_name || 'Verified Mentor';
+        const solutionText = primaryAnswer?.answer_text || doubt.mentor_solution || '';
+        const classification = primaryAnswer?.classification || doubt.mentor_classification || 'Verified Solution';
+
+        let ansAttsHtml = '';
+        if (answerAttachments.length > 0) {
+          ansAttsHtml = `
+            <div style="margin-top: 0.75rem;">
+              <div style="font-weight: 700; font-size: 0.82rem; color: #10b981; margin-bottom: 0.35rem;">
+                📎 Solution Attached Files (${answerAttachments.length})
+              </div>
+              <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0.5rem;">
+                ${answerAttachments.map((att, aIdx) => {
+            const info = this.getFileIconInfo(att.file_name || att.name, att.file_type || att.type);
+            const safeName = this.escapeHtml(att.file_name || att.name || 'solution_file');
+            const sizeStr = this.formatBytes(att.file_size || att.size);
+            return `
+                    <div style="background: rgba(16, 185, 129, 0.05); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: var(--radius-md); padding: 0.65rem 0.85rem; display: flex; align-items: center; justify-content: space-between; gap: 0.65rem;">
+                      <div style="display: flex; align-items: center; gap: 0.6rem; overflow: hidden; flex: 1;">
+                        <i class="${info.icon}" style="color: ${info.color}; font-size: 1.25rem; flex-shrink: 0;"></i>
+                        <div style="overflow: hidden; text-align: left;">
+                          <div style="font-weight: 700; font-size: 0.82rem; color: var(--text-primary); text-overflow: ellipsis; white-space: nowrap; overflow: hidden;">${safeName}</div>
+                          <div style="font-size: 0.7rem; color: var(--text-muted);">${info.ext} • ${sizeStr}</div>
+                        </div>
+                      </div>
+                      <div style="display: flex; gap: 0.35rem; flex-shrink: 0;">
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.previewAnswerAttachmentById('${doubt.id}', ${aIdx})" style="font-size: 0.72rem; padding: 0.25rem 0.5rem;">
+                          ${info.isCode ? 'View Code' : 'Preview'}
+                        </button>
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.downloadAnswerAttachmentById('${doubt.id}', ${aIdx})" style="font-size: 0.72rem; padding: 0.25rem 0.5rem;">
+                          <i class="fa-solid fa-download"></i>
+                        </button>
+                      </div>
+                    </div>
+                  `;
+          }).join('')}
+              </div>
+            </div>
+          `;
+        }
+
+        answerHtml = `
+          <div style="background: rgba(16, 185, 129, 0.06); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: var(--radius-md); padding: 1rem; margin-top: 1rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+              <span style="font-weight: 800; color: #10b981; font-size: 0.95rem;">
+                <i class="fa-solid fa-graduation-cap"></i> Solution by ${this.escapeHtml(solverName)}
+              </span>
+              <span style="background: rgba(16, 185, 129, 0.2); color: #059669; font-weight: 800; font-size: 0.74rem; padding: 0.2rem 0.55rem; border-radius: var(--radius-sm);">
+                ${this.escapeHtml(classification)}
+              </span>
+            </div>
+            <div style="font-size: 0.85rem; color: var(--text-primary); line-height: 1.5; white-space: pre-wrap;">
+              ${this.escapeHtml(solutionText)}
+            </div>
+            ${ansAttsHtml}
+
+            <!-- Modal Rating Box -->
+            <div style="margin-top: 0.75rem; padding-top: 0.65rem; border-top: 1px dashed rgba(16, 185, 129, 0.3); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
+              <div>
+                <div style="font-size: 0.84rem; font-weight: 800; color: var(--text-primary);">
+                  ${doubt.rating > 0 ? `✓ Student Rating: ${doubt.rating} / 5 Stars (Locked)` : 'Rate Mentor\'s Solution:'}
+                </div>
+                <div style="font-size: 0.72rem; color: var(--text-muted); margin-top: 0.15rem;">
+                  ${doubt.rating > 0 ? (doubt.rating >= 3 ? `🎉 +${doubt.reward_credits || 0.5} Cr bounty credited to mentor!` : `⭐ Rating recorded (${doubt.rating} Stars).`) : '3★ or higher releases mentor credit reward.'}
+                </div>
+              </div>
+              ${doubt.rating > 0 ? `
+                <div style="display: flex; gap: 0.25rem; align-items: center;" title="Rating Locked (${doubt.rating} Stars)">
+                  ${[1, 2, 3, 4, 5].map(star => `
+                    <i class="fa-${doubt.rating >= star ? 'solid' : 'regular'} fa-star" style="color: #f59e0b; font-size: 1.25rem;"></i>
+                  `).join('')}
+                </div>
+              ` : `
+                <div class="support-star-rating">
+                  ${[1, 2, 3, 4, 5].map(star => `
+                    <button type="button" class="star-btn" onclick="window.app.rateSupportTicket('${doubt.id}', ${star}); window.app.closeModal('viewFullDoubtModal');" title="Rate ${star} Stars">
+                      <i class="fa-${(doubt.rating || 0) >= star ? 'solid' : 'regular'} fa-star" style="color: #f59e0b; font-size: 1.25rem;"></i>
+                    </button>
+                  `).join('')}
+                </div>
+              `}
+            </div>
+          </div>
+        `;
+      }
+
+      bodyEl.innerHTML = `
+        <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+          <div style="font-size: 0.9rem; color: var(--text-primary); line-height: 1.5; white-space: pre-wrap;">
+            ${this.escapeHtml(doubt.description)}
+          </div>
+
+          ${doubt.code_snippet ? `
+            <div style="margin-top: 0.5rem;">
+              <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.25rem;">Original Code Snippet:</div>
+              <pre class="support-code-box" style="margin: 0; max-height: 220px; overflow-y: auto;"><code>${this.escapeHtml(doubt.code_snippet)}</code></pre>
+            </div>
+          ` : ''}
+
+          ${attsHtml}
+          ${answerHtml}
+        </div>
+      `;
+
+      this.openModal('viewFullDoubtModal');
+    },
+
+    previewDoubtAttachmentById(doubtId, attIndex) {
+      const doubt = (this.supportTickets || []).find(d => d.id === doubtId);
+      const att = doubt?.attachments?.[attIndex];
+      if (att) this.openFilePreview(att);
+    },
+
+    downloadDoubtAttachmentById(doubtId, attIndex) {
+      const doubt = (this.supportTickets || []).find(d => d.id === doubtId);
+      const att = doubt?.attachments?.[attIndex];
+      if (!att) return;
+      if (att.id && !att.id.startsWith('local_')) {
+        window.store.downloadAttachment(att.id, att.file_name).catch(() => {
+          const a = document.createElement('a');
+          a.href = att.file_data;
+          a.download = att.file_name;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+        });
+      } else {
+        const a = document.createElement('a');
+        a.href = att.file_data;
+        a.download = att.file_name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }
+    },
+
+    previewAnswerAttachmentById(doubtId, attIndex) {
+      const doubt = (this.supportTickets || []).find(d => d.id === doubtId);
+      const att = doubt?.answer_attachments?.[attIndex] || doubt?.answers?.[0]?.attachments?.[attIndex];
+      if (att) this.openFilePreview(att);
+    },
+
+    downloadAnswerAttachmentById(doubtId, attIndex) {
+      const doubt = (this.supportTickets || []).find(d => d.id === doubtId);
+      const att = doubt?.answer_attachments?.[attIndex] || doubt?.answers?.[0]?.attachments?.[attIndex];
+      if (!att) return;
+      if (att.id && !att.id.startsWith('local_')) {
+        window.store.downloadAttachment(att.id, att.file_name).catch(() => {
+          const a = document.createElement('a');
+          a.href = att.file_data;
+          a.download = att.file_name;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+        });
+      } else {
+        const a = document.createElement('a');
+        a.href = att.file_data;
+        a.download = att.file_name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }
+    },
+
+    async refreshDynamicSupportSubjects() {
+      try {
+        const subjects = await window.store.fetchSupportSubjects();
+        this.knownSupportSubjects = subjects || [];
+
+        // 1. Populate Submit Doubt modal subject dropdown
+        const skillSelect = document.getElementById('supportSkillSelect');
+        if (skillSelect) {
+          const currentVal = skillSelect.value;
+          skillSelect.innerHTML = this.knownSupportSubjects.map(s =>
+            `<option value="${this.escapeHtml(s)}">${this.escapeHtml(s)}</option>`
+          ).join('') + `<option value="__custom__">➕ Other / Custom Subject...</option>`;
+          if (currentVal && currentVal !== '__custom__' && this.knownSupportSubjects.includes(currentVal)) {
+            skillSelect.value = currentVal;
+          }
+        }
+
+        // 2. Populate Support Hub Subject Quick Filter
+        const filterSelect = document.getElementById('supportSubjectFilterSelect');
+        if (filterSelect) {
+          const curFilter = filterSelect.value || 'ALL';
+          filterSelect.innerHTML = `<option value="ALL">All Subjects (${this.knownSupportSubjects.length})</option>` +
+            this.knownSupportSubjects.map(s =>
+              `<option value="${this.escapeHtml(s)}">${this.escapeHtml(s)}</option>`
+            ).join('');
+          if (curFilter && (curFilter === 'ALL' || this.knownSupportSubjects.includes(curFilter))) {
+            filterSelect.value = curFilter;
+          }
+        }
+
+        // 3. Populate Search Autocomplete Suggestions Datalist
+        const datalist = document.getElementById('supportSubjectDatalist');
+        if (datalist) {
+          datalist.innerHTML = this.knownSupportSubjects.map(s =>
+            `<option value="${this.escapeHtml(s)}"></option>`
+          ).join('');
+        }
+      } catch (e) {
+        console.warn('Could not refresh dynamic subjects:', e);
+      }
+    },
+
+    async openCreateSupportModal() {
+      document.getElementById('createSupportTicketForm')?.reset();
+      const customGroup = document.getElementById('supportCustomSubjectGroup');
+      if (customGroup) customGroup.style.display = 'none';
+      const customInput = document.getElementById('supportCustomSkillInput');
+      if (customInput) customInput.value = '';
+
+      this.doubtAttachments = [];
+      this.renderDoubtUploadedFiles();
+      const descCount = document.getElementById('doubtDescCharCount');
+      if (descCount) descCount.textContent = '0';
+
+      await this.refreshDynamicSupportSubjects();
+      this.openModal('createSupportTicketModal');
+      await this.checkSupportEligibilityLive();
+    },
+
+    async checkSupportEligibilityLive() {
+      const skillSelect = document.getElementById('supportSkillSelect');
+      const statusBox = document.getElementById('supportEligibilityStatusBox');
+      if (!skillSelect || !statusBox) return;
+
+      let skillName = skillSelect.value;
+      if (skillName === '__custom__') {
+        skillName = document.getElementById('supportCustomSkillInput')?.value || 'Custom Course';
+      }
+
+      statusBox.className = 'eligibility-status-box';
+      statusBox.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Verifying student course attendance & credentials...';
+
+      try {
+        const data = await window.store.checkSupportEligibility(skillName);
+        if (data.eligible) {
+          statusBox.className = 'eligibility-status-box verified';
+          statusBox.innerHTML = `<i class="fa-solid fa-circle-check"></i> <strong>✓ Eligible for 0 Cr Support:</strong> ${data.proof}`;
+        } else {
+          statusBox.className = 'eligibility-status-box warning';
+          statusBox.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> <strong>Prior Knowledge Notice:</strong> ${data.proof || 'No session attendance recorded in this skill yet. You can still submit if you studied independently.'}`;
+        }
+      } catch (err) {
+        statusBox.className = 'eligibility-status-box verified';
+        statusBox.innerHTML = `<i class="fa-solid fa-circle-check"></i> <strong>✓ Eligible:</strong> Academic support pool active.`;
+      }
+    },
+
+    openResolveSupportModal(ticketId) {
+      const ticket = (this.supportTickets || []).find(t => t.id === ticketId);
+      if (!ticket) return;
+
+      const hiddenId = document.getElementById('resolveTicketId');
+      if (hiddenId) hiddenId.value = ticket.id;
+
+      const summary = document.getElementById('resolveTicketSummary');
+      if (summary) {
+        summary.innerHTML = `
+          <div style="display: flex; align-items: center; gap: 0.75rem; overflow: hidden; flex: 1;">
+            <div style="width: 38px; height: 38px; border-radius: 8px; background: rgba(245, 158, 11, 0.15); color: #d97706; display: flex; align-items: center; justify-content: center; font-size: 1.15rem; flex-shrink: 0;">
+              <i class="fa-regular fa-comment-dots"></i>
+            </div>
+            <div style="overflow: hidden; text-align: left; flex: 1;">
+              <div style="font-weight: 800; font-size: 0.9rem; color: var(--text-primary); text-overflow: ellipsis; white-space: nowrap; overflow: hidden;" title="${this.escapeHtml(ticket.title)}">${this.escapeHtml(ticket.title)}</div>
+              <div style="font-size: 0.74rem; color: var(--text-muted); margin-top: 0.15rem;">
+                ${this.escapeHtml(ticket.course || ticket.skill_name || 'Programming')} • ${this.escapeHtml(ticket.category || ticket.issue_type || 'Code Bug')}
+              </div>
+            </div>
+          </div>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.openViewFullDoubtModal('${ticket.id}')" style="font-size: 0.75rem; padding: 0.3rem 0.65rem; white-space: nowrap;">
+            <i class="fa-solid fa-expand"></i> View Full Doubt
+          </button>
+        `;
+      }
+
+      // Pre-select recommended quiz to match skill
+      const quizSelect = document.getElementById('resolveRecommendedQuizSelect');
+      if (quizSelect) {
+        for (let opt of quizSelect.options) {
+          if (opt.value.toLowerCase().includes((ticket.skill_name || '').toLowerCase()) || (ticket.skill_name || '').toLowerCase().includes(opt.value.toLowerCase())) {
+            quizSelect.value = opt.value;
+            break;
+          }
+        }
+      }
+
+      const solutionInput = document.getElementById('resolveSolutionInput');
+      if (solutionInput) solutionInput.value = '';
+      const answerCount = document.getElementById('answerCharCount');
+      if (answerCount) answerCount.textContent = '0';
+
+      this.answerAttachments = [];
+      this.renderAnswerUploadedFiles();
+
+      this.openModal('resolveSupportModal');
+    },
+
+    async claimSupportTicket(ticketId) {
+      try {
+        await window.store.claimSupportTicket(ticketId);
+        this.showToast('Ticket claimed! You can now submit your solution and earn skill credits.', 'lock');
+        await this.renderSupportDesk();
+      } catch (err) {
+        alert('Could not claim ticket: ' + err.message);
+      }
+    },
+
+    async rateSupportTicket(ticketId, rating) {
+      if (!this.ratingInProgress) this.ratingInProgress = {};
+      if (this.ratingInProgress[ticketId]) return;
+      this.ratingInProgress[ticketId] = true;
+
+      try {
+        const res = await window.store.rateSupportTicket(ticketId, rating, '');
+        if (res.rewardReleased) {
+          this.showToast(`🎉 Rated ${rating} Stars! +${res.rewardAmount || 0.5} Credits reward released to mentor!`, 'coins');
+        } else if (rating >= 3) {
+          this.showToast(`⭐ Rated ${rating} Stars! Rating saved successfully.`, 'check');
+        } else {
+          this.showToast(`⭐ Rated ${rating} Stars. (Mentor reward is released for ratings of 3★ or above).`, 'user');
+        }
+        await window.store.fetchMe();
+        await window.store.fetchWallet();
+        this.renderNavbar();
+        await this.renderSupportDesk(true);
+        if (this.currentTab === 'view-wallet') this.renderWallet();
+      } catch (err) {
+        alert('Could not submit rating: ' + err.message);
+      } finally {
+        this.ratingInProgress[ticketId] = false;
+      }
+    },
+
+    async renderSupportDesk(silent = false) {
+      try {
+        const [doubts, stats] = await Promise.all([
+          window.store.fetchSupportDoubts(),
+          window.store.fetchSupportStats(),
+          this.refreshDynamicSupportSubjects()
+        ]);
+        this.supportTickets = doubts || [];
+
+        // Update Dynamic KPI metrics from database
+        const openEl = document.getElementById('supportOpenCount');
+        if (openEl) openEl.textContent = `${stats.openDoubts || 0} Doubts`;
+
+        const resolvedEl = document.getElementById('supportResolvedCount');
+        if (resolvedEl) resolvedEl.textContent = `${stats.resolvedDoubts || 0} Solved`;
+
+        const rewardsEl = document.getElementById('supportTotalRewards');
+        if (rewardsEl) rewardsEl.textContent = `${(stats.totalRewardsCredits || 0).toFixed(1)} Cr`;
+
+        // Update sidebar badge
+        const badge = document.getElementById('sidebarSupportBadge');
+        if (badge) {
+          const openCount = stats.openDoubts || this.supportTickets.filter(t => t.status === 'OPEN').length;
+          badge.textContent = `${openCount} Open`;
+          badge.style.display = openCount > 0 ? 'inline-flex' : 'none';
+        }
+
+        this.renderSupportDeskCards();
+        if (!silent) this.startSupportDeskPolling();
+      } catch (err) {
+        console.error('Error rendering support desk:', err);
+      }
+    },
+
+    startSupportDeskPolling() {
+      if (this.supportDeskPollInterval) clearInterval(this.supportDeskPollInterval);
+      this.supportDeskPollInterval = setInterval(async () => {
+        if (this.currentTab === 'view-support' || this.currentTab === 'view-wallet') {
+          await this.renderSupportDesk(true);
+          await window.store.fetchMe();
+          await window.store.fetchWallet();
+          this.renderNavbar();
+          if (this.currentTab === 'view-wallet') this.renderWallet();
+        }
+      }, 5000);
+    },
+
+    async acceptSupportDoubt(doubtId, btnElement) {
+      if (btnElement) {
+        btnElement.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Accepting...';
+        btnElement.disabled = true;
+      }
+
+      try {
+        const res = await window.store.acceptSupportDoubt(doubtId);
+        this.showToast('🎉 You accepted this doubt! Write your solution to earn bounty credits.', 'check');
+        await this.renderSupportDesk();
+        this.openResolveSupportModal(doubtId);
+      } catch (err) {
+        if (btnElement) {
+          btnElement.innerHTML = '<i class="fa-solid fa-hand-holding-hand"></i> Accept Doubt';
+          btnElement.disabled = false;
+        }
+
+        if (err.isConflict || err.status === 409 || (err.message && err.message.includes('already been accepted'))) {
+          this.showToast('⚠️ This doubt has already been accepted by another user.', 'lock');
+        } else {
+          alert(err.message || 'Could not accept doubt.');
+        }
+        await this.renderSupportDesk();
+      }
+    },
+
+    renderSupportDeskCards() {
+      const container = document.getElementById('supportTicketsCardGrid');
+      if (!container) return;
+
+      const currentPersona = window.store.getCurrentPersona();
+      const currentUserId = currentPersona?.id || window.store.currentUser?.id;
+      let filtered = (this.supportTickets || []).slice();
+
+      // 1. Filter by Status / Category / Mine
+      if (this.supportFilter === 'CODE_BUG') {
+        filtered = filtered.filter(t => {
+          const cat = ((t.category || '') + ' ' + (t.issue_type || '')).toLowerCase();
+          return cat.includes('bug') || cat.includes('error') || cat.includes('code') || cat.includes('syntax') || cat.includes('exception');
+        });
+      } else if (this.supportFilter === 'CONCEPT_DOUBT') {
+        filtered = filtered.filter(t => {
+          const cat = ((t.category || '') + ' ' + (t.issue_type || '')).toLowerCase();
+          return cat.includes('concept') || cat.includes('explain') || cat.includes('theory') || cat.includes('logic') || cat.includes('why') || cat.includes('how');
+        });
+      } else if (this.supportFilter === 'ARCH_DESIGN') {
+        filtered = filtered.filter(t => {
+          const cat = ((t.category || '') + ' ' + (t.issue_type || '')).toLowerCase();
+          return cat.includes('arch') || cat.includes('design') || cat.includes('db') || cat.includes('database') || cat.includes('system') || cat.includes('indexing');
+        });
+      } else if (this.supportFilter === 'OPEN') {
+        filtered = filtered.filter(t => t.status === 'OPEN' && (!t.accepted_by_user_id || t.accepted_by_user_id === ''));
+      } else if (this.supportFilter === 'ACCEPTED' || this.supportFilter === 'IN_PROGRESS') {
+        filtered = filtered.filter(t => t.status === 'ACCEPTED' || t.status === 'CLAIMED');
+      } else if (this.supportFilter === 'RESOLVED') {
+        filtered = filtered.filter(t => t.status === 'RESOLVED' || t.status === 'CLOSED');
+      } else if (this.supportFilter === 'MINE') {
+        filtered = filtered.filter(t =>
+          (t.raised_by_user_id && t.raised_by_user_id === currentUserId) ||
+          (t.student_id && t.student_id === currentUserId) ||
+          (t.accepted_by_user_id && t.accepted_by_user_id === currentUserId) ||
+          (t.support_mentor_id && t.support_mentor_id === currentUserId) ||
+          (t.answers && t.answers.some(a => a.answered_by_user_id === currentUserId))
+        );
+      }
+
+      // 2. Filter by Dynamic Subject Filter Dropdown
+      if (this.supportSubjectFilter && this.supportSubjectFilter !== 'ALL') {
+        const targetSub = this.supportSubjectFilter.toLowerCase().trim();
+        filtered = filtered.filter(t => {
+          const combined = ((t.course || '') + ' ' + (t.skill_name || '') + ' ' + (t.category || '')).toLowerCase();
+          return combined.includes(targetSub);
+        });
+      }
+
+      // 3. Filter by Search Query
+      if (this.supportSearchQuery) {
+        const q = this.supportSearchQuery.toLowerCase().trim();
+        filtered = filtered.filter(t =>
+          (t.title && t.title.toLowerCase().includes(q)) ||
+          (t.description && t.description.toLowerCase().includes(q)) ||
+          (t.category && t.category.toLowerCase().includes(q)) ||
+          (t.course && t.course.toLowerCase().includes(q)) ||
+          (t.skill_name && t.skill_name.toLowerCase().includes(q)) ||
+          (t.raised_by_name && t.raised_by_name.toLowerCase().includes(q)) ||
+          (t.student_name && t.student_name.toLowerCase().includes(q)) ||
+          (t.accepted_by_name && t.accepted_by_name.toLowerCase().includes(q))
+        );
+      }
+
+      if (filtered.length === 0) {
+        if (this.supportFilter === 'MINE') {
+          container.innerHTML = `
+            <div style="grid-column: 1 / -1; text-align: center; padding: 3rem 1.5rem; background: var(--bg-card); border-radius: var(--radius-xl); border: 1px dashed var(--border-medium);">
+              <i class="fa-solid fa-user-check" style="font-size: 2.5rem; color: var(--text-muted); margin-bottom: 0.75rem;"></i>
+              <h4 style="font-size: 1.15rem; font-weight: 800; color: var(--text-primary);">No Personal Tasks or Doubts Found</h4>
+              <p style="font-size: 0.85rem; color: var(--text-secondary); max-width: 460px; margin: 0.35rem auto 1.25rem;">
+                You have not asked any doubts or accepted any peer tasks yet. Ask a doubt for free or accept an open doubt from the Common Support Hub!
+              </p>
+              <button class="btn btn-primary btn-sm" onclick="window.app.openCreateSupportModal()">
+                <i class="fa-solid fa-plus-circle"></i> Ask a Doubt Now (0 Cr)
+              </button>
+            </div>
+          `;
+        } else if (this.supportFilter === 'OPEN') {
+          container.innerHTML = `
+            <div style="grid-column: 1 / -1; text-align: center; padding: 3rem 1.5rem; background: var(--bg-card); border-radius: var(--radius-xl); border: 1px dashed var(--border-medium);">
+              <i class="fa-solid fa-circle-check" style="font-size: 2.5rem; color: #10b981; margin-bottom: 0.75rem;"></i>
+              <h4 style="font-size: 1.15rem; font-weight: 800; color: var(--text-primary);">All Doubts Are Claimed or Solved!</h4>
+              <p style="font-size: 0.85rem; color: var(--text-secondary); max-width: 440px; margin: 0.35rem auto 1.25rem;">
+                There are no unassigned open doubts right now. Check back soon or raise a new question.
+              </p>
+              <button class="btn btn-primary btn-sm" onclick="window.app.openCreateSupportModal()">
+                <i class="fa-solid fa-plus-circle"></i> Ask a Doubt (0 Cr)
+              </button>
+            </div>
+          `;
+        } else {
+          container.innerHTML = `
+            <div style="grid-column: 1 / -1; text-align: center; padding: 3rem 1.5rem; background: var(--bg-card); border-radius: var(--radius-xl); border: 1px dashed var(--border-medium);">
+              <i class="fa-solid fa-headset" style="font-size: 2.5rem; color: var(--text-muted); margin-bottom: 0.75rem;"></i>
+              <h4 style="font-size: 1.15rem; font-weight: 800; color: var(--text-primary);">No Support Doubts Found</h4>
+              <p style="font-size: 0.85rem; color: var(--text-secondary); max-width: 440px; margin: 0.35rem auto 1.25rem;">
+                ${this.supportSearchQuery ? 'No doubts match your search query.' : 'Raise a doubt or ask for help in any engineering topic (Cost: 0 Credits).'}
+              </p>
+              <button class="btn btn-primary btn-sm" onclick="window.app.openCreateSupportModal()">
+                <i class="fa-solid fa-plus-circle"></i> Ask a Doubt Now (0 Cr)
+              </button>
+            </div>
+          `;
+        }
+        return;
+      }
+
+      const escapeHtml = (str) => {
+        if (!str) return '';
+        return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+      };
+
+      const renderAttachmentCardsList = (doubt) => {
+        const atts = doubt.attachments || [];
+        if (atts.length === 0 && doubt.attachment_data) {
+          atts.push({
+            id: 'dbt_att_' + doubt.id,
+            file_name: doubt.attachment_name || 'attachment',
+            file_type: doubt.attachment_data.startsWith('data:image/') ? 'image/png' : 'text/plain',
+            file_data: doubt.attachment_data,
+            file_size: doubt.attachment_data.length
+          });
+        }
+
+        if (atts.length === 0) return '';
+
+        return `
+          <div style="margin-top: 0.5rem;">
+            <div style="font-size: 0.76rem; font-weight: 700; color: var(--text-muted); margin-bottom: 0.35rem;">
+              📎 Attachments (${atts.length}):
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr; gap: 0.4rem;">
+              ${atts.map((att, aIdx) => {
+          const info = this.getFileIconInfo(att.file_name, att.file_type);
+          const name = escapeHtml(att.file_name || 'attachment');
+          const sizeStr = this.formatBytes(att.file_size || att.size);
+          return `
+                  <div style="background: var(--bg-subtle); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 0.45rem 0.75rem; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;">
+                    <div style="display: flex; align-items: center; gap: 0.55rem; overflow: hidden; flex: 1;">
+                      <i class="${info.icon}" style="color: ${info.color}; font-size: 1.15rem; flex-shrink: 0;"></i>
+                      <div style="overflow: hidden; text-align: left;">
+                        <div style="font-weight: 700; font-size: 0.78rem; color: var(--text-primary); text-overflow: ellipsis; white-space: nowrap; overflow: hidden;" title="${name}">${name}</div>
+                        <div style="font-size: 0.67rem; color: var(--text-muted);">${info.ext} • ${sizeStr}</div>
+                      </div>
+                    </div>
+                    <div style="display: flex; gap: 0.3rem; flex-shrink: 0;">
+                      <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.previewDoubtAttachmentById('${doubt.id}', ${aIdx})" style="font-size: 0.7rem; padding: 0.2rem 0.5rem;">
+                        ${info.isCode ? 'View Code' : 'Preview'}
+                      </button>
+                      <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.downloadDoubtAttachmentById('${doubt.id}', ${aIdx})" style="font-size: 0.7rem; padding: 0.2rem 0.45rem;" title="Download">
+                        <i class="fa-solid fa-download"></i>
+                      </button>
+                    </div>
+                  </div>
+                `;
+        }).join('')}
+            </div>
+          </div>
+        `;
+      };
+
+      const renderAnswerAttachmentCardsList = (doubt) => {
+        const primaryAnswer = doubt.answers?.[0] || null;
+        const atts = doubt.answer_attachments || primaryAnswer?.attachments || [];
+        if (atts.length === 0) return '';
+
+        return `
+          <div style="margin-top: 0.5rem;">
+            <div style="font-size: 0.74rem; font-weight: 700; color: #10b981; margin-bottom: 0.3rem;">
+              📎 Solution Files (${atts.length}):
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr; gap: 0.4rem;">
+              ${atts.map((att, aIdx) => {
+          const info = this.getFileIconInfo(att.file_name, att.file_type);
+          const name = escapeHtml(att.file_name || 'solution_file');
+          const sizeStr = this.formatBytes(att.file_size || att.size);
+          return `
+                  <div style="background: rgba(16, 185, 129, 0.05); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: var(--radius-sm); padding: 0.4rem 0.7rem; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;">
+                    <div style="display: flex; align-items: center; gap: 0.55rem; overflow: hidden; flex: 1;">
+                      <i class="${info.icon}" style="color: ${info.color}; font-size: 1.15rem; flex-shrink: 0;"></i>
+                      <div style="overflow: hidden; text-align: left;">
+                        <div style="font-weight: 700; font-size: 0.78rem; color: var(--text-primary); text-overflow: ellipsis; white-space: nowrap; overflow: hidden;">${name}</div>
+                        <div style="font-size: 0.67rem; color: var(--text-muted);">${info.ext} • ${sizeStr}</div>
+                      </div>
+                    </div>
+                    <div style="display: flex; gap: 0.3rem; flex-shrink: 0;">
+                      <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.previewAnswerAttachmentById('${doubt.id}', ${aIdx})" style="font-size: 0.7rem; padding: 0.2rem 0.5rem;">
+                        ${info.isCode ? 'View Code' : 'Preview'}
+                      </button>
+                      <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.downloadAnswerAttachmentById('${doubt.id}', ${aIdx})" style="font-size: 0.7rem; padding: 0.2rem 0.45rem;">
+                        <i class="fa-solid fa-download"></i>
+                      </button>
+                    </div>
+                  </div>
+                `;
+        }).join('')}
+            </div>
+          </div>
+        `;
+      };
+
+      container.innerHTML = filtered.map(t => {
+        const isAuthor = Boolean(currentUserId && (t.raised_by_user_id === currentUserId || t.student_id === currentUserId));
+        const isAcceptedByMe = Boolean(currentUserId && (t.accepted_by_user_id === currentUserId || t.support_mentor_id === currentUserId || (t.answers && t.answers.some(a => a.answered_by_user_id === currentUserId))));
+        const isOpen = (t.status === 'OPEN');
+        const isAccepted = (t.status === 'ACCEPTED' || t.status === 'CLAIMED');
+        const isResolved = (t.status === 'RESOLVED' || t.status === 'CLOSED');
+
+        const authorName = t.raised_by_name || t.student_name || t.raised_by_user_id || 'Student';
+        const solverName = t.accepted_by_name || t.support_mentor_name || t.accepted_by_user_id || 'Assigned Mentor';
+        const categoryLabel = t.category || t.course || t.skill_name || 'Technical Doubt';
+
+        const statusClass = isOpen ? 'open' : (isAccepted ? 'claimed' : 'resolved');
+        const statusBadgeHtml = isOpen
+          ? `<span class="support-status-pill open" style="background: rgba(245, 158, 11, 0.15); color: #d97706; font-weight: 800;"><i class="fa-solid fa-clock"></i> OPEN</span>`
+          : (isAccepted
+            ? `<span class="support-status-pill claimed" style="background: rgba(37, 99, 235, 0.15); color: #2563eb; font-weight: 800;"><i class="fa-solid fa-spinner fa-spin"></i> ACCEPTED</span>`
+            : `<span class="support-status-pill resolved" style="background: rgba(16, 185, 129, 0.15); color: #059669; font-weight: 800;"><i class="fa-solid fa-circle-check"></i> RESOLVED</span>`);
+
+        return `
+          <div class="support-card status-${statusClass}" id="doubtCard_${t.id}">
+            <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+              <div class="support-card-top">
+                <div class="support-badge-group">
+                  <span class="support-tag tag-skill"><i class="fa-solid fa-book-open"></i> ${escapeHtml(categoryLabel)}</span>
+                  ${t.course && t.course !== categoryLabel ? `<span class="support-tag tag-concept">${escapeHtml(t.course)}</span>` : ''}
+                </div>
+                ${statusBadgeHtml}
+              </div>
+
+              <!-- Question Title & Description -->
+              <div>
+                <h3 class="support-card-title">${escapeHtml(t.title)}</h3>
+                <p class="support-card-desc" style="margin-top: 0.35rem;">${escapeHtml(t.description)}</p>
+              </div>
+
+              <!-- Code Snippet Box -->
+              ${t.code_snippet ? `
+                <pre class="support-code-box"><code>${escapeHtml(t.code_snippet)}</code></pre>
+              ` : ''}
+
+              <!-- Uploaded Attachments -->
+              ${renderAttachmentCardsList(t)}
+
+              <!-- ACCEPTED State Info Banner -->
+              ${isAccepted ? `
+                ${isAcceptedByMe ? `
+                  <div style="background: rgba(37, 99, 235, 0.08); border: 1px solid rgba(37, 99, 235, 0.25); border-radius: var(--radius-md); padding: 0.65rem 0.85rem; font-size: 0.8rem; color: #1d4ed8; font-weight: 700; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;">
+                    <span><i class="fa-solid fa-circle-check" style="color: #2563eb;"></i> You accepted this doubt. Write and submit your answer below.</span>
+                    <span style="background: #2563eb; color: #ffffff; padding: 0.15rem 0.45rem; border-radius: var(--radius-sm); font-size: 0.7rem;">Your Task</span>
+                  </div>
+                ` : (isAuthor ? `
+                  <div style="background: rgba(37, 99, 235, 0.08); border: 1px solid rgba(37, 99, 235, 0.25); border-radius: var(--radius-md); padding: 0.65rem 0.85rem; font-size: 0.8rem; color: #1d4ed8; font-weight: 700;">
+                    <i class="fa-solid fa-user-check" style="color: #2563eb;"></i> Your doubt has been accepted by <strong>${escapeHtml(solverName)}</strong>. ⏳ Waiting for the solution...
+                  </div>
+                ` : `
+                  <div style="background: rgba(100, 116, 139, 0.08); border: 1px solid rgba(100, 116, 139, 0.2); border-radius: var(--radius-md); padding: 0.65rem 0.85rem; font-size: 0.8rem; color: var(--text-secondary); font-weight: 600;">
+                    <i class="fa-solid fa-lock" style="color: #64748b;"></i> Accepted by <strong>${escapeHtml(solverName)}</strong>. Mentor is currently solving this doubt.
+                  </div>
+                `)}
+              ` : ''}
+
+              <!-- RESOLVED Solution Box -->
+              ${isResolved ? `
+                <div class="support-solution-box">
+                  <div class="support-solution-header">
+                    <span><i class="fa-solid fa-user-check"></i> Answered by ${escapeHtml(solverName)}</span>
+                    <span style="font-weight: 800; color: var(--accent-emerald);">+${t.reward_credits || '1.5'} Cr Bounty</span>
+                  </div>
+                  <div style="font-size: 0.74rem; font-weight: 700; color: var(--text-muted);">
+                    Classification: <span style="color: var(--primary);">${escapeHtml(t.mentor_classification || 'Level 1: Syntax / Typo')}</span>
+                  </div>
+                  <div class="support-solution-body">${escapeHtml(t.mentor_solution || 'Verified solution provided.')}</div>
+
+                  <!-- Answer Solution Attachments -->
+                  ${renderAnswerAttachmentCardsList(t)}
+
+                  ${t.recommended_assessment_skill ? `
+                    <div class="support-quiz-recommendation-cta">
+                      <div>
+                        <strong>🎯 Follow-Up Assessment:</strong> Take 20-Q AI Quiz in <em>${escapeHtml(t.recommended_assessment_skill)}</em>
+                      </div>
+                      <button class="btn btn-primary btn-sm" style="font-size: 0.72rem; padding: 0.25rem 0.6rem;" onclick="window.app.startQuiz('${t.recommended_assessment_skill}')">
+                        <i class="fa-solid fa-play"></i> Take Quiz
+                      </button>
+                    </div>
+                  ` : ''}
+
+                  <!-- Rating Section with 3-Star Reward Gate Feedback -->
+                  ${isAuthor ? `
+                    <div style="border-top: 1px dashed var(--border-subtle); padding-top: 0.75rem; margin-top: 0.5rem; background: ${t.rating ? 'rgba(16, 185, 129, 0.04)' : 'rgba(245, 158, 11, 0.04)'}; border-radius: var(--radius-md); padding: 0.75rem;">
+                      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
+                        <div>
+                          <div style="font-size: 0.88rem; font-weight: 800; color: var(--text-primary); display: flex; align-items: center; gap: 0.35rem;">
+                            <span>${t.rating ? 'Student Rating (Submitted & Locked):' : 'Rate Mentor\'s Solution:'}</span>
+                          </div>
+                          <div style="font-size: 0.73rem; color: var(--text-secondary); margin-top: 0.2rem;">
+                            ${t.rating
+                ? (t.rating >= 3
+                  ? `<span style="color: #059669; font-weight: 700;">🎉 Rated ${t.rating}★ — +${t.reward_credits || 0.5} Cr bounty released to mentor!</span>`
+                  : `<span style="color: #d97706; font-weight: 700;">⭐ Rated ${t.rating}★ (Feedback saved. Mentor bounty requires rating ≥ 3★).</span>`)
+                : `Rate 3★ or above to release +${t.reward_credits || 0.5} Cr bounty to mentor.`}
+                          </div>
+                        </div>
+                        ${t.rating ? `
+                          <div style="display: flex; gap: 0.25rem; align-items: center;" title="Rating Locked (${t.rating} Stars)">
+                            ${[1, 2, 3, 4, 5].map(star => `
+                              <i class="fa-${t.rating >= star ? 'solid' : 'regular'} fa-star" style="color: #f59e0b; font-size: 1.25rem;"></i>
+                            `).join('')}
+                          </div>
+                        ` : `
+                          <div class="support-star-rating">
+                            ${[1, 2, 3, 4, 5].map(star => `
+                              <button type="button" class="star-btn" onclick="window.app.rateSupportTicket('${t.id}', ${star})" title="Rate ${star} Stars">
+                                <i class="fa-${(t.rating || 0) >= star ? 'solid' : 'regular'} fa-star" style="color: #f59e0b; font-size: 1.25rem;"></i>
+                              </button>
+                            `).join('')}
+                          </div>
+                        `}
+                      </div>
+                    </div>
+                  ` : (isAcceptedByMe ? `
+                    ${t.rating ? `
+                      <div style="border-top: 1px dashed var(--border-subtle); margin-top: 0.5rem; background: ${t.rating >= 3 ? 'rgba(16, 185, 129, 0.08)' : 'rgba(245, 158, 11, 0.08)'}; border: 1.5px solid ${t.rating >= 3 ? 'rgba(16, 185, 129, 0.3)' : 'rgba(245, 158, 11, 0.3)'}; border-radius: var(--radius-md); padding: 0.75rem;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
+                          <div>
+                            <div style="font-size: 0.88rem; font-weight: 800; color: ${t.rating >= 3 ? '#059669' : '#d97706'}; display: flex; align-items: center; gap: 0.4rem;">
+                              <i class="fa-solid fa-${t.rating >= 3 ? 'trophy' : 'star'}"></i>
+                              <span>Student Rating: ${t.rating} / 5 Stars</span>
+                            </div>
+                            <div style="font-size: 0.76rem; color: var(--text-primary); margin-top: 0.25rem; font-weight: 600;">
+                              ${t.rating >= 3
+                  ? `🎉 +${t.reward_credits || 0.5} Credits bounty deposited into your wallet! Your score & balance have increased.`
+                  : `⚠️ Student rated ${t.rating}★. Mentor credit bounty requires 3★ or above.`}
+                            </div>
+                          </div>
+                          <div class="support-star-rating">
+                            ${[1, 2, 3, 4, 5].map(star => `
+                              <i class="fa-${(t.rating || 0) >= star ? 'solid' : 'regular'} fa-star" style="color: #f59e0b; font-size: 1.25rem;"></i>
+                            `).join('')}
+                          </div>
+                        </div>
+                      </div>
+                    ` : `
+                      <div style="border-top: 1px dashed var(--border-subtle); padding-top: 0.6rem; margin-top: 0.4rem; background: rgba(37, 99, 235, 0.06); border: 1px solid rgba(37, 99, 235, 0.2); border-radius: var(--radius-md); padding: 0.65rem 0.85rem; font-size: 0.78rem; color: #1d4ed8; font-weight: 600; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;">
+                        <div style="display: flex; align-items: center; gap: 0.45rem;">
+                          <i class="fa-solid fa-hourglass-half fa-spin"></i>
+                          <span>Waiting for student to review & rate solution.</span>
+                        </div>
+                        <span style="font-size: 0.72rem; background: #2563eb; color: #fff; padding: 0.15rem 0.5rem; border-radius: var(--radius-sm); font-weight: 700;">
+                          +${t.reward_credits || 0.5} Cr on ≥3★
+                        </span>
+                      </div>
+                    `}
+                  ` : `
+                    ${t.rating ? `
+                      <div style="border-top: 1px dashed var(--border-subtle); padding-top: 0.6rem; margin-top: 0.4rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.4rem;">
+                        <div style="display: flex; align-items: center; gap: 0.4rem;">
+                          <span style="font-size: 0.78rem; font-weight: 700; color: var(--text-secondary);">Student Rating:</span>
+                          <span style="font-size: 0.82rem; font-weight: 800; color: ${t.rating >= 3 ? '#10b981' : '#f59e0b'};">
+                            ${t.rating} / 5 Stars ${t.rating >= 3 ? '(Reward Released ✓)' : ''}
+                          </span>
+                        </div>
+                        <div class="support-star-rating">
+                          ${[1, 2, 3, 4, 5].map(star => `
+                            <i class="fa-${(t.rating || 0) >= star ? 'solid' : 'regular'} fa-star" style="color: #f59e0b; font-size: 1.15rem;"></i>
+                          `).join('')}
+                        </div>
+                      </div>
+                    ` : `
+                      <div style="border-top: 1px dashed var(--border-subtle); padding-top: 0.5rem; margin-top: 0.35rem; font-size: 0.74rem; color: var(--text-muted); text-align: right;">
+                        <i class="fa-solid fa-clock"></i> Awaiting Student Rating (3★ or above releases +${t.reward_credits || 0.5} Cr mentor bounty)
+                      </div>
+                    `}
+                  `)}
+                </div>
+              ` : ''}
+            </div>
+
+            <!-- Footer Meta & Actions -->
+            <div style="margin-top: 0.75rem;">
+              <div class="support-meta-row">
+                <div>
+                  <i class="fa-regular fa-user"></i> Asked by: <strong>${escapeHtml(authorName)}</strong>
+                </div>
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.openViewFullDoubtModal('${t.id}')" style="font-size: 0.72rem; padding: 0.2rem 0.5rem;">
+                    <i class="fa-solid fa-expand"></i> Details
+                  </button>
+                  <div class="support-bounty-badge">
+                    <i class="fa-solid fa-coins"></i> ${isOpen ? `Bounty: +${t.reward_credits || '1.5'} Cr` : (isResolved ? `Awarded: +${t.reward_credits} Cr` : 'In Triage')}
+                  </div>
+                </div>
+              </div>
+
+              <!-- Action Buttons according to State & Persona Permissions -->
+              <div style="display: flex; gap: 0.5rem; margin-top: 0.75rem;">
+                ${isOpen && !isAuthor ? `
+                  <button class="btn btn-primary btn-sm" style="flex: 1;" onclick="window.app.acceptSupportDoubt('${t.id}', this)">
+                    <i class="fa-solid fa-hand-holding-hand"></i> Accept Doubt (+${t.reward_credits || 1.5} Cr)
+                  </button>
+                ` : ''}
+
+                ${isOpen && isAuthor ? `
+                  <div style="font-size: 0.78rem; color: #d97706; font-weight: 700; display: flex; align-items: center; gap: 0.35rem; padding: 0.4rem 0;">
+                    <i class="fa-solid fa-hourglass-half"></i> Open • Waiting for a peer tutor to accept (0 Cr cost)
+                  </div>
+                ` : ''}
+
+                ${isAccepted && isAcceptedByMe ? `
+                  <button class="btn btn-emerald btn-sm" style="flex: 1; background: #10b981; border-color: #10b981; color: white;" onclick="window.app.openResolveSupportModal('${t.id}')">
+                    <i class="fa-solid fa-graduation-cap"></i> Submit Answer (+${t.reward_credits || 1.5} Cr)
+                  </button>
+                ` : ''}
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    },
+
   };
 
   // Expose app to window
