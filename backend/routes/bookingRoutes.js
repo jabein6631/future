@@ -61,7 +61,7 @@ router.get('/availability', optionalAuth, async (req, res, next) => {
  * POST /api/booking/confirm
  * Final confirmation and booking with double-booking prevention and wallet escrow deduction
  */
-router.post('/confirm', async (req, res, next) => {
+router.post('/confirm', authenticateToken, async (req, res, next) => {
   try {
     const learnerId = req.user.id;
     const {

@@ -112,7 +112,42 @@ db.allAsync = function (sql, params = []) {
   });
 };
 
-async function initSchema() {
+db.batchAsync = function (statements) {
+  if (!statements || statements.length === 0) return Promise.resolve([]);
+  if (isTurso && tursoClient) {
+    return executeTursoWithRetry(() => tursoClient.batch(statements)).catch(err => {
+      console.warn('⚠️ [Turso Batch Notice]:', err.message);
+      // Fallback to sequential execution on batch failure
+      return Promise.all(statements.map(s => {
+        const sql = typeof s === 'string' ? s : s.sql;
+        const args = typeof s === 'string' ? [] : (s.args || []);
+        return db.runAsync(sql, args).catch(() => ({}));
+      }));
+    });
+  }
+  return Promise.all(statements.map(s => {
+    const sql = typeof s === 'string' ? s : s.sql;
+    const args = typeof s === 'string' ? [] : (s.args || []);
+    return db.runAsync(sql, args);
+  }));
+};
+
+let isSchemaInitialized = false;
+
+async function initSchema(force = false) {
+  if (isSchemaInitialized && !force) return;
+
+  try {
+    // Fast verification: if core table 'users' already exists and force is false, skip full DDL run
+    const existingTable = await db.getAsync(`SELECT name FROM sqlite_master WHERE type='table' AND name='users'`);
+    if (existingTable && !force) {
+      isSchemaInitialized = true;
+      return;
+    }
+  } catch (err) {
+    // If check fails, proceed with standard schema creation
+  }
+
   // 1. Users Table
   await db.runAsync(`
     CREATE TABLE IF NOT EXISTS users (
@@ -862,6 +897,39 @@ async function initSchema() {
       // Ignore if column already exists or table was freshly created
     }
   }
+
+  // Create High-Performance Database Indexes
+  const performanceIndexes = [
+    `CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`,
+    `CREATE INDEX IF NOT EXISTS idx_users_is_admin ON users(is_admin)`,
+    `CREATE INDEX IF NOT EXISTS idx_skills_offered_user ON skills_offered(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_skills_wanted_user ON skills_wanted(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_certificates_user ON certificates(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_quiz_attempts_user ON quiz_attempts(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_sessions_teacher ON sessions(teacher_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_sessions_student ON sessions(student_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status)`,
+    `CREATE INDEX IF NOT EXISTS idx_sessions_date ON sessions(date, time)`,
+    `CREATE INDEX IF NOT EXISTS idx_session_attendees_sess ON session_attendees(session_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_session_attendees_stud ON session_attendees(student_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_notif_user_unread ON notifications(user_id, is_unread, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_messages_pair ON messages(sender_id, receiver_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_support_doubts_status ON support_doubts(status)`,
+    `CREATE INDEX IF NOT EXISTS idx_support_doubts_user ON support_doubts(raised_by_user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_support_answers_doubt ON support_answers(doubt_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_support_dbt_att_doubt ON support_doubt_attachments(doubt_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_support_ans_att_ans ON support_answer_attachments(answer_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_pw_reset_user ON password_reset_otps(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_pw_reset_email ON password_reset_otps(email)`
+  ];
+
+  try {
+    await db.batchAsync(performanceIndexes);
+  } catch (e) {
+    // Indexes already exist or created
+  }
+
+  isSchemaInitialized = true;
 }
 
 module.exports = {

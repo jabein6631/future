@@ -17,17 +17,21 @@ function getClientMeta(req) {
   return { ip, userAgent };
 }
 
-async function recordLoginAudit({ userId, email, role, ipAddress, userAgent, status, failureReason, authMethod }) {
-  try {
-    const logId = 'log_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
-    await db.runAsync(
-      `INSERT INTO login_history (id, user_id, email, role, ip_address, user_agent, status, failure_reason, auth_method)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [logId, userId || null, email || null, role || null, ipAddress || '127.0.0.1', userAgent || 'Unknown', status, failureReason || null, authMethod || 'PASSWORD']
-    );
-  } catch (err) {
-    console.warn('⚠️ Could not record login audit:', err.message);
-  }
+function recordLoginAudit({ userId, email, role, ipAddress, userAgent, status, failureReason, authMethod }) {
+  // Execute non-blocking in background so authentication response is never delayed by audit logging
+  setImmediate(async () => {
+    try {
+      const logId = 'log_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+      await db.runAsync(
+        `INSERT INTO login_history (id, user_id, email, role, ip_address, user_agent, status, failure_reason, auth_method)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [logId, userId || null, email || null, role || null, ipAddress || '127.0.0.1', userAgent || 'Unknown', status, failureReason || null, authMethod || 'PASSWORD']
+      );
+    } catch (err) {
+      console.warn('⚠️ Could not record login audit:', err.message);
+    }
+  });
+  return Promise.resolve();
 }
 
 const authController = {

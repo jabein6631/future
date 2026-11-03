@@ -123,16 +123,39 @@ const dbProvider = {
     
     if (users.length === 0) {
       users = await db.allAsync(`SELECT * FROM users WHERE is_admin = 0`);
-      for (const u of users) {
-        delete u.password_hash;
-        try {
-          u.badges = typeof u.badges_json === 'string' ? JSON.parse(u.badges_json || '[]') : (u.badges_json || []);
-        } catch (e) {
-          u.badges = [];
+      const userIds = users.map(u => u.id);
+      if (userIds.length > 0) {
+        const placeholders = userIds.map(() => '?').join(',');
+        const [allOffered, allWanted, allCerts] = await Promise.all([
+          db.allAsync(`SELECT * FROM skills_offered WHERE user_id IN (${placeholders})`, userIds),
+          db.allAsync(`SELECT * FROM skills_wanted WHERE user_id IN (${placeholders})`, userIds),
+          db.allAsync(`SELECT * FROM certificates WHERE user_id IN (${placeholders})`, userIds)
+        ]);
+
+        const offeredMap = {};
+        const wantedMap = {};
+        const certsMap = {};
+        for (const o of allOffered) {
+          (offeredMap[o.user_id] = offeredMap[o.user_id] || []).push(o);
         }
-        u.skillsOffered = await db.allAsync(`SELECT * FROM skills_offered WHERE user_id = ?`, [u.id]);
-        u.skillsWanted = await db.allAsync(`SELECT * FROM skills_wanted WHERE user_id = ?`, [u.id]);
-        u.certificates = await db.allAsync(`SELECT * FROM certificates WHERE user_id = ?`, [u.id]);
+        for (const w of allWanted) {
+          (wantedMap[w.user_id] = wantedMap[w.user_id] || []).push(w);
+        }
+        for (const c of allCerts) {
+          (certsMap[c.user_id] = certsMap[c.user_id] || []).push(c);
+        }
+
+        for (const u of users) {
+          delete u.password_hash;
+          try {
+            u.badges = typeof u.badges_json === 'string' ? JSON.parse(u.badges_json || '[]') : (u.badges_json || []);
+          } catch (e) {
+            u.badges = [];
+          }
+          u.skillsOffered = offeredMap[u.id] || [];
+          u.skillsWanted = wantedMap[u.id] || [];
+          u.certificates = certsMap[u.id] || [];
+        }
       }
     }
 
@@ -765,9 +788,11 @@ const dbProvider = {
 
   async getSessions() {
     await this.checkAndUpdateLiveAndExpiredSessions();
-    const sessions = await db.allAsync(`SELECT * FROM sessions ORDER BY created_at DESC`);
-    const attendees = await db.allAsync(`SELECT * FROM session_attendees ORDER BY joined_at ASC`);
-    const users = await db.allAsync(`SELECT id, name, avatar FROM users`);
+    const [sessions, attendees, users] = await Promise.all([
+      db.allAsync(`SELECT * FROM sessions ORDER BY created_at DESC`),
+      db.allAsync(`SELECT * FROM session_attendees ORDER BY joined_at ASC`),
+      db.allAsync(`SELECT id, name, avatar FROM users`)
+    ]);
     const userMap = {};
     users.forEach(u => userMap[u.id] = u);
 
@@ -1197,27 +1222,43 @@ const dbProvider = {
     const users = await db.allAsync(`SELECT * FROM users WHERE is_admin = 0 ORDER BY rating DESC, reviews_count DESC`) || [];
     const mentors = [];
 
-    for (const u of users) {
-      // Exclude currently logged in user
-      if (filter.excludeUserId && (u.id === filter.excludeUserId || u.email === filter.excludeUserId)) {
-        continue;
-      }
-      // Exclude suspended or inactive users
-      if (u.is_active === 0 || u.status === 'suspended' || u.status === 'INACTIVE') {
-        continue;
-      }
+    // Filter candidate users first
+    const candidateUsers = users.filter(u => {
+      if (filter.excludeUserId && (u.id === filter.excludeUserId || u.email === filter.excludeUserId)) return false;
+      if (u.is_active === 0 || u.status === 'suspended' || u.status === 'INACTIVE') return false;
+      return true;
+    });
 
-      // Query verified certificates from Turso
-      const certs = await db.allAsync(
-        `SELECT * FROM certificates WHERE user_id = ? AND (is_verified = 1 OR certificate_status = 'VERIFIED' OR tutor_eligible = 1)`,
-        [u.id]
-      ) || [];
+    if (candidateUsers.length === 0) return [];
 
-      // Query quiz attempts from Turso
-      const attempts = await db.allAsync(
-        `SELECT * FROM quiz_attempts WHERE user_id = ?`,
-        [u.id]
-      ) || [];
+    const userIds = candidateUsers.map(u => u.id);
+    const placeholders = userIds.map(() => '?').join(',');
+
+    // Parallel fetch for all candidate mentors in a single roundtrip
+    const [allCerts, allAttempts, allSkillsOffered] = await Promise.all([
+      db.allAsync(`SELECT * FROM certificates WHERE user_id IN (${placeholders}) AND (is_verified = 1 OR certificate_status = 'VERIFIED' OR tutor_eligible = 1)`, userIds),
+      db.allAsync(`SELECT * FROM quiz_attempts WHERE user_id IN (${placeholders})`, userIds),
+      db.allAsync(`SELECT * FROM skills_offered WHERE user_id IN (${placeholders})`, userIds)
+    ]);
+
+    const certsMap = {};
+    const attemptsMap = {};
+    const skillsMap = {};
+
+    for (const c of (allCerts || [])) {
+      (certsMap[c.user_id] = certsMap[c.user_id] || []).push(c);
+    }
+    for (const a of (allAttempts || [])) {
+      (attemptsMap[a.user_id] = attemptsMap[a.user_id] || []).push(a);
+    }
+    for (const s of (allSkillsOffered || [])) {
+      (skillsMap[s.user_id] = skillsMap[s.user_id] || []).push(s);
+    }
+
+    for (const u of candidateUsers) {
+      const certs = certsMap[u.id] || [];
+      const attempts = attemptsMap[u.id] || [];
+      const skillsOffered = skillsMap[u.id] || [];
 
       const maxScore = attempts.reduce((max, a) => Math.max(max, Number(a.score_percent) || 0), 0);
       const hasPassedQuiz = attempts.some(a => a.passed === 1 || Number(a.score_percent) >= 70);
@@ -1250,12 +1291,6 @@ const dbProvider = {
       if (tier === 'Unverified') {
         continue;
       }
-
-      // Query skills offered from Turso
-      const skillsOffered = await db.allAsync(
-        `SELECT * FROM skills_offered WHERE user_id = ?`,
-        [u.id]
-      ) || [];
 
       // Collect distinct skills from skills_offered, certificates, quiz attempts, and user major
       const allSkills = [];
@@ -2645,13 +2680,12 @@ const dbProvider = {
   },
 
   async getUserSessionsCategorized(userId) {
-    await this.checkAndUpdateExpiredSessions();
-
-    const targetUser = await db.getAsync(`SELECT * FROM users WHERE id = ? OR LOWER(email) = ?`, [userId, String(userId).toLowerCase()]);
+    const [targetUser, allSessions, reviews] = await Promise.all([
+      db.getAsync(`SELECT * FROM users WHERE id = ? OR LOWER(email) = ?`, [userId, String(userId).toLowerCase()]),
+      this.getSessions(),
+      db.allAsync(`SELECT session_id, rating, comment FROM reviews`)
+    ]);
     const userEmail = (targetUser?.email || '').toLowerCase();
-
-    const allSessions = await this.getSessions();
-    const reviews = await db.allAsync(`SELECT * FROM reviews`);
 
     const reviewMap = {};
     reviews.forEach(r => {
@@ -3482,8 +3516,14 @@ const dbProvider = {
   /**
    * Scan active sessions and atomically update both Live and Expired sessions in Turso
    */
-  async checkAndUpdateLiveAndExpiredSessions() {
+  async checkAndUpdateLiveAndExpiredSessions(force = false) {
     try {
+      const now = Date.now();
+      if (!force && this._lastLiveExpiredCheck && (now - this._lastLiveExpiredCheck < 8000)) {
+        return this._lastLiveExpiredResult || { activatedSessionIds: [], expiredSessionIds: [] };
+      }
+      this._lastLiveExpiredCheck = now;
+
       const candidateSessions = await db.allAsync(
         `SELECT * FROM sessions WHERE status NOT IN ('ENDED', 'Completed', 'CANCELLED', 'DECLINED')`
       );
@@ -3556,7 +3596,9 @@ const dbProvider = {
           }
         }
       }
-      return { activatedSessionIds, expiredSessionIds };
+      const result = { activatedSessionIds, expiredSessionIds };
+      this._lastLiveExpiredResult = result;
+      return result;
     } catch (err) {
       console.warn('checkAndUpdateLiveAndExpiredSessions error:', err.message);
       return { activatedSessionIds: [], expiredSessionIds: [] };

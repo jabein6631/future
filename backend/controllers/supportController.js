@@ -316,9 +316,9 @@ const supportController = {
       if (doubtIds.length > 0) {
         const placeholders = doubtIds.map(() => '?').join(',');
 
-        // 1. Fetch all doubt attachments
+        // 1. Fetch all doubt attachments (metadata only for fast list loading)
         const doubtAtts = await db.allAsync(`
-          SELECT * FROM support_doubt_attachments
+          SELECT id, doubt_id, file_name, file_type, file_size, created_at FROM support_doubt_attachments
           WHERE doubt_id IN (${placeholders})
           ORDER BY created_at ASC
         `, doubtIds);
@@ -329,7 +329,8 @@ const supportController = {
 
         // 2. Fetch all answers
         const answers = await db.allAsync(`
-          SELECT a.*, u.name AS answered_by_name, u.avatar AS answered_by_avatar
+          SELECT a.id, a.doubt_id, a.answered_by_user_id, a.answer_text, a.classification, a.attachment_name, a.recommended_assessment_skill, a.created_at, a.updated_at,
+                 u.name AS answered_by_name, u.avatar AS answered_by_avatar
           FROM support_answers a
           LEFT JOIN users u ON u.id = a.answered_by_user_id
           WHERE a.doubt_id IN (${placeholders})
@@ -340,7 +341,7 @@ const supportController = {
         if (answerIds.length > 0) {
           const ansPlaceholders = answerIds.map(() => '?').join(',');
           const ansAtts = await db.allAsync(`
-            SELECT * FROM support_answer_attachments
+            SELECT id, answer_id, doubt_id, file_name, file_type, file_size, created_at FROM support_answer_attachments
             WHERE answer_id IN (${ansPlaceholders})
             ORDER BY created_at ASC
           `, answerIds);

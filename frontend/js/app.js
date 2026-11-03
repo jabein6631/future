@@ -68,6 +68,15 @@
     // WhatsApp Direct Chat State (Text + Voice Only)
     chatConversations: [],
     chatSearchQuery: '',
+
+    // Performance Optimization: Debounce utility for responsive UI interactions
+    debounce(fn, delay = 200) {
+      let timer = null;
+      return function(...args) {
+        clearTimeout(timer);
+        timer = setTimeout(() => fn.apply(this, args), delay);
+      };
+    },
     voiceMediaRecorder: null,
     voiceMediaStream: null,
     voiceAudioChunks: [],
@@ -203,13 +212,19 @@
       // 3. Notifications Dropdown
       const notifBtn = document.getElementById('notifBellBtn');
       const notifDropdown = document.getElementById('notifDropdown');
-      notifBtn?.addEventListener('click', async (e) => {
+      notifBtn?.addEventListener('click', (e) => {
         e.stopPropagation();
         if (notifDropdown) {
           const willOpen = !notifDropdown.classList.contains('show');
           if (willOpen) {
-            await this.renderNotifications(true);
             notifDropdown.classList.add('show');
+            this.renderNotifications(false); // Render instantly from memory (<10ms)
+            // Background update without blocking UI
+            if (window.store && typeof window.store.fetchNotifications === 'function') {
+              window.store.fetchNotifications().then(() => {
+                this.renderNotifications(false);
+              }).catch(() => {});
+            }
           } else {
             notifDropdown.classList.remove('show');
           }
@@ -540,9 +555,9 @@
       const searchDropdown = document.getElementById('globalSearchResultsDropdown');
       const searchClearBtn = document.getElementById('globalSearchClearBtn');
 
+      const debouncedGlobalSearch = this.debounce((q) => this.performGlobalSearch(q), 180);
       searchInput?.addEventListener('input', (e) => {
-        const q = e.target.value.trim();
-        this.performGlobalSearch(q);
+        debouncedGlobalSearch(e.target.value.trim());
       });
 
       searchInput?.addEventListener('focus', (e) => {
@@ -619,8 +634,9 @@
       });
 
       // Explore In-View Search Input
+      const debouncedExplore = this.debounce((val) => this.renderExploreCatalogue(val), 200);
       document.getElementById('exploreSearchInput')?.addEventListener('input', (e) => {
-        this.renderExploreCatalogue(e.target.value);
+        debouncedExplore(e.target.value);
       });
 
       // Explore Sort (Credits Low-to-High, High-to-Low, Ratings, Tier, Reviews)
@@ -3740,8 +3756,9 @@
     bindBookingFlowEvents() {
       // Step 1: Mentor Search & Quick Filters
       const mentorSearch = document.getElementById('bookingMentorSearchInput');
+      const debouncedMentorSearch = this.debounce((val) => this.filterBookingMentors(val), 180);
       mentorSearch?.addEventListener('input', (e) => {
-        this.filterBookingMentors(e.target.value);
+        debouncedMentorSearch(e.target.value);
       });
 
       const filterBar = document.getElementById('bookingMentorFilterBar');
@@ -3786,8 +3803,9 @@
 
       // Step 2: Subject Search & Navigation
       const subjectSearch = document.getElementById('bookingSubjectSearchInput');
+      const debouncedSubjectSearch = this.debounce((val) => this.filterBookingSubjects(val), 180);
       subjectSearch?.addEventListener('input', (e) => {
-        this.filterBookingSubjects(e.target.value);
+        debouncedSubjectSearch(e.target.value);
       });
       document.getElementById('bookingSubjectNotes')?.addEventListener('input', (e) => {
         this.bookingState.subjectNotes = e.target.value;
@@ -6217,9 +6235,12 @@
       });
 
       // Support Search Input with live keyword filtering
-      document.getElementById('supportSearchInput')?.addEventListener('input', (e) => {
-        this.supportSearchQuery = e.target.value.toLowerCase().trim();
+      const debouncedSupportSearch = this.debounce((val) => {
+        this.supportSearchQuery = val.toLowerCase().trim();
         this.renderSupportDeskCards();
+      }, 180);
+      document.getElementById('supportSearchInput')?.addEventListener('input', (e) => {
+        debouncedSupportSearch(e.target.value);
       });
     },
 
@@ -6277,9 +6298,12 @@
       });
 
       // Assessment Subject Search Filter
-      document.getElementById('assessmentSubjectSearchInput')?.addEventListener('input', (e) => {
-        this.assessmentSearchQuery = (e.target.value || '').toLowerCase().trim();
+      const debouncedAssessmentSearch = this.debounce((val) => {
+        this.assessmentSearchQuery = (val || '').toLowerCase().trim();
         this.renderAssessmentSubjectsGrid();
+      }, 180);
+      document.getElementById('assessmentSubjectSearchInput')?.addEventListener('input', (e) => {
+        debouncedAssessmentSearch(e.target.value);
       });
 
       // Question Count Pills (10, 20, 30, 40)
@@ -8331,10 +8355,18 @@
     },
 
     async handleNotificationClick(id, targetPage) {
-      if (id && window.store && typeof window.store.markNotificationRead === 'function') {
-        try { await window.store.markNotificationRead(id); } catch (e) { }
+      if (id && window.store?.notifications) {
+        const item = window.store.notifications.find(n => n.id === id);
+        if (item) {
+          item.unread = false;
+          item.is_unread = 0;
+        }
       }
-      this.renderNotifications(false);
+      this.renderNotifications(false); // Instant optimistic update (<5ms)
+
+      if (id && window.store && typeof window.store.markNotificationRead === 'function') {
+        window.store.markNotificationRead(id).catch(() => {});
+      }
 
       if (targetPage) {
         this.switchView(targetPage);
@@ -8345,17 +8377,30 @@
     },
 
     async markSingleNotificationRead(id) {
-      if (id && window.store && typeof window.store.markNotificationRead === 'function') {
-        try { await window.store.markNotificationRead(id); } catch (e) { }
+      if (id && window.store?.notifications) {
+        const item = window.store.notifications.find(n => n.id === id);
+        if (item) {
+          item.unread = false;
+          item.is_unread = 0;
+        }
       }
       this.renderNotifications(false);
+      if (id && window.store && typeof window.store.markNotificationRead === 'function') {
+        window.store.markNotificationRead(id).catch(() => {});
+      }
     },
 
     async markAllNotificationsRead() {
-      if (window.store && typeof window.store.markAllNotificationsRead === 'function') {
-        try { await window.store.markAllNotificationsRead(); } catch (e) { }
+      if (window.store?.notifications) {
+        window.store.notifications.forEach(n => {
+          n.unread = false;
+          n.is_unread = 0;
+        });
       }
-      this.renderNotifications(false);
+      this.renderNotifications(false); // Instant optimistic update (<5ms)
+      if (window.store && typeof window.store.markAllNotificationsRead === 'function') {
+        window.store.markAllNotificationsRead().catch(() => {});
+      }
     },
 
     // ==========================================
@@ -10972,9 +11017,12 @@
       });
 
       // 4. Contacts Search Filter
-      searchInput?.addEventListener('input', (e) => {
-        this.chatSearchQuery = e.target.value.toLowerCase().trim();
+      const debouncedChatSearch = this.debounce((val) => {
+        this.chatSearchQuery = val.toLowerCase().trim();
         this.renderChatContacts();
+      }, 180);
+      searchInput?.addEventListener('input', (e) => {
+        debouncedChatSearch(e.target.value);
       });
 
       // 5. Mobile Back Button
