@@ -11623,85 +11623,144 @@
     /**
      * View Full Doubt Modal
      */
-    openViewFullDoubtModal(doubtId) {
-      const doubt = (this.supportTickets || []).find(d => d.id === doubtId);
-      if (!doubt) return;
+    renderSafeMarkdown(text) {
+      if (!text) return '';
+
+      // 1. First escape all raw HTML characters to prevent XSS attacks
+      let escaped = String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+
+      // 2. Extract and preserve multiline fenced code blocks ```lang\ncode\n```
+      const codeBlocks = [];
+      escaped = escaped.replace(/```([a-zA-Z0-9_-]*)\r?\n([\s\S]*?)```/g, (match, lang, code) => {
+        const placeholder = '§§CB' + codeBlocks.length + '§§';
+        codeBlocks.push('<pre class="markdown-code-block" data-lang="' + (lang || 'code') + '"><code>' + code.trim() + '</code></pre>');
+        return placeholder;
+      });
+
+      // 3. Extract and preserve inline code `code`
+      const inlineCodes = [];
+      escaped = escaped.replace(/`([^`\r\n]+)`/g, (match, code) => {
+        const placeholder = '§§IC' + inlineCodes.length + '§§';
+        inlineCodes.push('<code class="inline-code">' + code + '</code>');
+        return placeholder;
+      });
+
+      // 4. Headings (must be at start of line)
+      escaped = escaped.replace(/^#### (.*?)$/gm, '<h4 class="markdown-h4">$1</h4>');
+      escaped = escaped.replace(/^### (.*?)$/gm, '<h3 class="markdown-h3">$1</h3>');
+      escaped = escaped.replace(/^## (.*?)$/gm, '<h2 class="markdown-h2">$1</h2>');
+      escaped = escaped.replace(/^# (.*?)$/gm, '<h1 class="markdown-h1">$1</h1>');
+
+      // 5. Bold & Italic
+      escaped = escaped.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+      escaped = escaped.replace(/__(.*?)__/g, '<strong>$1</strong>');
+      escaped = escaped.replace(/\*([^\*\r\n]+)\*/g, '<em>$1</em>');
+      escaped = escaped.replace(/_([^_\r\n]+)_/g, '<em></em>');
+
+      // 6. Blockquotes
+      escaped = escaped.replace(/^&gt; (.*?)$/gm, '<blockquote>$1</blockquote>');
+
+      // 7. Lists (unordered and ordered)
+      const lines = escaped.split(/\r?\n/);
+      const processedLines = [];
+      let inUl = false;
+      let inOl = false;
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const isUlItem = /^[-*]\s+(.*)$/.test(line);
+        const isOlItem = /^\d+\.\s+(.*)$/.test(line);
+
+        if (isUlItem) {
+          if (!inUl) {
+            if (inOl) { processedLines.push('</ol>'); inOl = false; }
+            processedLines.push('<ul class="markdown-ul">');
+            inUl = true;
+          }
+          processedLines.push(line.replace(/^[-*]\s+(.*)$/, '<li>$1</li>'));
+        } else if (isOlItem) {
+          if (!inOl) {
+            if (inUl) { processedLines.push('</ul>'); inUl = false; }
+            processedLines.push('<ol class="markdown-ol">');
+            inOl = true;
+          }
+          processedLines.push(line.replace(/^\d+\.\s+(.*)$/, '<li>$1</li>'));
+        } else {
+          if (inUl) { processedLines.push('</ul>'); inUl = false; }
+          if (inOl) { processedLines.push('</ol>'); inOl = false; }
+          processedLines.push(line);
+        }
+      }
+      if (inUl) processedLines.push('</ul>');
+      if (inOl) processedLines.push('</ol>');
+
+      escaped = processedLines.join('\n');
+
+      // 8. Paragraphs and line breaks
+      const blocks = escaped.split(/\n{2,}/);
+      const formattedBlocks = blocks.map(block => {
+        block = block.trim();
+        if (!block) return '';
+        if (/^<(h[1-4]|ul|ol|pre|blockquote|div)/i.test(block)) {
+          return block;
+        }
+        const withBr = block.replace(/\n/g, '<br>');
+        return '<p class="markdown-p">' + withBr + '</p>';
+      });
+
+      let result = formattedBlocks.join('\n');
+
+      // 9. Restore preserved code blocks and inline code
+      inlineCodes.forEach((codeHtml, idx) => {
+        result = result.replace('§§IC' + idx + '§§', codeHtml);
+      });
+      codeBlocks.forEach((blockHtml, idx) => {
+        result = result.replace('§§CB' + idx + '§§', blockHtml);
+      });
+
+      return result;
+    },
+
+    async openViewFullDoubtModal(doubtId) {
+      let doubt = (this.supportTickets || []).find(d => d.id === doubtId);
+      this.activeFullDoubt = doubt;
 
       const titleEl = document.getElementById('fullDoubtModalTitle');
-      if (titleEl) titleEl.textContent = doubt.title;
-
-      const authorName = doubt.raised_by_name || doubt.student_name || 'Student';
-      const categoryLabel = doubt.category || doubt.course || doubt.skill_name || 'Technical Doubt';
       const metaEl = document.getElementById('fullDoubtModalMeta');
-      if (metaEl) {
-        metaEl.textContent = `Asked by ${authorName} • ${categoryLabel} • Status: ${doubt.status}`;
-      }
-
       const bodyEl = document.getElementById('fullDoubtModalBody');
       if (!bodyEl) return;
 
-      const attachments = doubt.attachments || [];
-      const answers = doubt.answers || [];
-      const primaryAnswer = answers[0] || null;
-      const answerAttachments = doubt.answer_attachments || primaryAnswer?.attachments || [];
+      const renderModalContent = (d) => {
+        if (!d) return;
+        this.activeFullDoubt = d;
 
-      let attsHtml = '';
-      if (attachments.length > 0) {
-        attsHtml = `
-          <div style="margin-top: 0.85rem;">
-            <div style="font-weight: 700; font-size: 0.85rem; color: var(--text-primary); margin-bottom: 0.4rem;">
-              📎 Student Attached Files (${attachments.length})
-            </div>
-            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0.5rem;">
-              ${attachments.map((att, aIdx) => {
-          const info = this.getFileIconInfo(att.file_name || att.name, att.file_type || att.type);
-          const safeName = this.escapeHtml(att.file_name || att.name || 'attachment');
-          const sizeStr = this.formatBytes(att.file_size || att.size);
-          return `
-                  <div style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 0.65rem 0.85rem; display: flex; align-items: center; justify-content: space-between; gap: 0.65rem;">
-                    <div style="display: flex; align-items: center; gap: 0.6rem; overflow: hidden; flex: 1;">
-                      <i class="${info.icon}" style="color: ${info.color}; font-size: 1.25rem; flex-shrink: 0;"></i>
-                      <div style="overflow: hidden; text-align: left;">
-                        <div style="font-weight: 700; font-size: 0.82rem; color: var(--text-primary); text-overflow: ellipsis; white-space: nowrap; overflow: hidden;">${safeName}</div>
-                        <div style="font-size: 0.7rem; color: var(--text-muted);">${info.ext} • ${sizeStr}</div>
-                      </div>
-                    </div>
-                    <div style="display: flex; gap: 0.35rem; flex-shrink: 0;">
-                      <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.previewDoubtAttachmentById('${doubt.id}', ${aIdx})" style="font-size: 0.72rem; padding: 0.25rem 0.5rem;">
-                        ${info.isCode ? 'View Code' : 'Preview'}
-                      </button>
-                      <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.downloadDoubtAttachmentById('${doubt.id}', ${aIdx})" style="font-size: 0.72rem; padding: 0.25rem 0.5rem;">
-                        <i class="fa-solid fa-download"></i>
-                      </button>
-                    </div>
-                  </div>
-                `;
-        }).join('')}
-            </div>
-          </div>
-        `;
-      }
+        if (titleEl) titleEl.textContent = d.title || 'Doubt Details';
+        const authorName = d.raised_by_name || d.student_name || 'Student';
+        const categoryLabel = d.category || d.course || d.skill_name || 'Technical Doubt';
+        if (metaEl) {
+          metaEl.textContent = `Asked by ${authorName} • ${categoryLabel} • Status: ${d.status}`;
+        }
 
-      let answerHtml = '';
-      if (doubt.status === 'RESOLVED' && (primaryAnswer || doubt.mentor_solution)) {
-        const solverName = primaryAnswer?.answered_by_name || doubt.accepted_by_name || doubt.support_mentor_name || 'Verified Mentor';
-        const solutionText = primaryAnswer?.answer_text || doubt.mentor_solution || '';
-        const classification = primaryAnswer?.classification || doubt.mentor_classification || 'Verified Solution';
-
-        let ansAttsHtml = '';
-        if (answerAttachments.length > 0) {
-          ansAttsHtml = `
-            <div style="margin-top: 0.75rem;">
-              <div style="font-weight: 700; font-size: 0.82rem; color: #10b981; margin-bottom: 0.35rem;">
-                📎 Solution Attached Files (${answerAttachments.length})
+        const attachments = d.attachments || [];
+        let attsHtml = '';
+        if (attachments.length > 0) {
+          attsHtml = `
+            <div style="margin-top: 0.85rem;">
+              <div style="font-weight: 700; font-size: 0.85rem; color: var(--text-primary); margin-bottom: 0.4rem;">
+                📎 Student Attached Files (${attachments.length})
               </div>
               <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0.5rem;">
-                ${answerAttachments.map((att, aIdx) => {
-            const info = this.getFileIconInfo(att.file_name || att.name, att.file_type || att.type);
-            const safeName = this.escapeHtml(att.file_name || att.name || 'solution_file');
-            const sizeStr = this.formatBytes(att.file_size || att.size);
-            return `
-                    <div style="background: rgba(16, 185, 129, 0.05); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: var(--radius-md); padding: 0.65rem 0.85rem; display: flex; align-items: center; justify-content: space-between; gap: 0.65rem;">
+                ${attachments.map((att, aIdx) => {
+                  const info = this.getFileIconInfo(att.file_name || att.name, att.file_type || att.type);
+                  const safeName = this.escapeHtml(att.file_name || att.name || 'attachment');
+                  const sizeStr = this.formatBytes(att.file_size || att.size);
+                  return `
+                    <div style="background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 0.65rem 0.85rem; display: flex; align-items: center; justify-content: space-between; gap: 0.65rem;">
                       <div style="display: flex; align-items: center; gap: 0.6rem; overflow: hidden; flex: 1;">
                         <i class="${info.icon}" style="color: ${info.color}; font-size: 1.25rem; flex-shrink: 0;"></i>
                         <div style="overflow: hidden; text-align: left;">
@@ -11710,96 +11769,263 @@
                         </div>
                       </div>
                       <div style="display: flex; gap: 0.35rem; flex-shrink: 0;">
-                        <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.previewAnswerAttachmentById('${doubt.id}', ${aIdx})" style="font-size: 0.72rem; padding: 0.25rem 0.5rem;">
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.previewDoubtAttachmentById('${d.id}', ${aIdx})" style="font-size: 0.72rem; padding: 0.25rem 0.5rem;">
                           ${info.isCode ? 'View Code' : 'Preview'}
                         </button>
-                        <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.downloadAnswerAttachmentById('${doubt.id}', ${aIdx})" style="font-size: 0.72rem; padding: 0.25rem 0.5rem;">
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.downloadDoubtAttachmentById('${d.id}', ${aIdx})" style="font-size: 0.72rem; padding: 0.25rem 0.5rem;">
                           <i class="fa-solid fa-download"></i>
                         </button>
                       </div>
                     </div>
                   `;
-          }).join('')}
+                }).join('')}
               </div>
             </div>
           `;
         }
 
-        answerHtml = `
-          <div style="background: rgba(16, 185, 129, 0.06); border: 1px solid rgba(16, 185, 129, 0.25); border-radius: var(--radius-md); padding: 1rem; margin-top: 1rem;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-              <span style="font-weight: 800; color: #10b981; font-size: 0.95rem;">
-                <i class="fa-solid fa-graduation-cap"></i> Solution by ${this.escapeHtml(solverName)}
-              </span>
-              <span style="background: rgba(16, 185, 129, 0.2); color: #059669; font-weight: 800; font-size: 0.74rem; padding: 0.2rem 0.55rem; border-radius: var(--radius-sm);">
-                ${this.escapeHtml(classification)}
-              </span>
-            </div>
-            <div style="font-size: 0.85rem; color: var(--text-primary); line-height: 1.5; white-space: pre-wrap;">
-              ${this.escapeHtml(solutionText)}
-            </div>
-            ${ansAttsHtml}
+        // Responses / answers list
+        let answersList = Array.isArray(d.answers) ? [...d.answers] : [];
+        if (answersList.length === 0 && d.mentor_solution) {
+          answersList = [{
+            id: 'legacy_ans_' + d.id,
+            answered_by_name: d.accepted_by_name || d.support_mentor_name || 'Verified Mentor',
+            answered_by_avatar: d.accepted_by_avatar,
+            answer_text: d.mentor_solution,
+            classification: d.mentor_classification || 'Verified Solution',
+            attachments: d.answer_attachments || [],
+            created_at: d.resolved_at || d.updated_at
+          }];
+        }
 
-            <!-- Modal Rating Box -->
-            <div style="margin-top: 0.75rem; padding-top: 0.65rem; border-top: 1px dashed rgba(16, 185, 129, 0.3); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
-              <div>
-                <div style="font-size: 0.84rem; font-weight: 800; color: var(--text-primary);">
-                  ${doubt.rating > 0 ? `✓ Student Rating: ${doubt.rating} / 5 Stars (Locked)` : 'Rate Mentor\'s Solution:'}
-                </div>
-                <div style="font-size: 0.72rem; color: var(--text-muted); margin-top: 0.15rem;">
-                  ${doubt.rating > 0 ? (doubt.rating >= 3 ? `🎉 +${doubt.reward_credits || 0.5} Cr bounty credited to mentor!` : `⭐ Rating recorded (${doubt.rating} Stars).`) : '3★ or higher releases mentor credit reward.'}
-                </div>
+        // Sort chronologically (oldest to newest)
+        const sortedAnswers = answersList.sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0));
+
+        let responsesHtml = '';
+        if (sortedAnswers.length > 0) {
+          responsesHtml = `
+            <div class="support-responses-wrapper">
+              <div style="font-weight: 800; font-size: 0.95rem; color: #10b981; display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem;">
+                <i class="fa-solid fa-comments"></i> Mentor & Admin Responses (${sortedAnswers.length})
               </div>
-              ${doubt.rating > 0 ? `
-                <div style="display: flex; gap: 0.25rem; align-items: center;" title="Rating Locked (${doubt.rating} Stars)">
-                  ${[1, 2, 3, 4, 5].map(star => `
-                    <i class="fa-${doubt.rating >= star ? 'solid' : 'regular'} fa-star" style="color: #f59e0b; font-size: 1.25rem;"></i>
-                  `).join('')}
+              ${sortedAnswers.map((ans, ansIdx) => {
+                const solverName = ans.answered_by_name || d.accepted_by_name || d.support_mentor_name || 'Verified Mentor';
+                const classification = ans.classification || d.mentor_classification || 'Verified Solution';
+                const ansAtts = ans.attachments || (ansIdx === 0 ? d.answer_attachments : []) || [];
+                const timeLabel = ans.created_at ? new Date(ans.created_at).toLocaleString() : 'Recent';
+
+                let ansAttsHtml = '';
+                if (ansAtts.length > 0) {
+                  ansAttsHtml = `
+                    <div style="margin-top: 0.75rem;">
+                      <div style="font-weight: 700; font-size: 0.8rem; color: #10b981; margin-bottom: 0.35rem;">
+                        📎 Solution Attached Files (${ansAtts.length})
+                      </div>
+                      <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0.5rem;">
+                        ${ansAtts.map((att, aIdx) => {
+                          const info = this.getFileIconInfo(att.file_name || att.name, att.file_type || att.type);
+                          const safeName = this.escapeHtml(att.file_name || att.name || 'solution_file');
+                          const sizeStr = this.formatBytes(att.file_size || att.size);
+                          return `
+                            <div style="background: rgba(16, 185, 129, 0.05); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: var(--radius-md); padding: 0.65rem 0.85rem; display: flex; align-items: center; justify-content: space-between; gap: 0.65rem;">
+                              <div style="display: flex; align-items: center; gap: 0.6rem; overflow: hidden; flex: 1;">
+                                <i class="${info.icon}" style="color: ${info.color}; font-size: 1.25rem; flex-shrink: 0;"></i>
+                                <div style="overflow: hidden; text-align: left;">
+                                  <div style="font-weight: 700; font-size: 0.82rem; color: var(--text-primary); text-overflow: ellipsis; white-space: nowrap; overflow: hidden;">${safeName}</div>
+                                  <div style="font-size: 0.7rem; color: var(--text-muted);">${info.ext} • ${sizeStr}</div>
+                                </div>
+                              </div>
+                              <div style="display: flex; gap: 0.35rem; flex-shrink: 0;">
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.previewAnswerAttachment('${d.id}', ${ansIdx}, ${aIdx})" style="font-size: 0.72rem; padding: 0.25rem 0.5rem;">
+                                  ${info.isCode ? 'View Code' : 'Preview'}
+                                </button>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="window.app.downloadAnswerAttachment('${d.id}', ${ansIdx}, ${aIdx})" style="font-size: 0.72rem; padding: 0.25rem 0.5rem;">
+                                  <i class="fa-solid fa-download"></i>
+                                </button>
+                              </div>
+                            </div>
+                          `;
+                        }).join('')}
+                      </div>
+                    </div>
+                  `;
+                }
+
+                return `
+                  <div class="support-response-card">
+                    <div class="support-response-header">
+                      <div class="support-response-author">
+                        <div class="support-response-avatar">
+                          ${solverName.charAt(0).toUpperCase()}
+                        </div>
+                        <div class="support-response-meta-text">
+                          <div class="support-response-name">
+                            ${this.escapeHtml(solverName)}
+                          </div>
+                          <div class="support-response-time">${timeLabel}</div>
+                        </div>
+                      </div>
+                      <span class="support-classification-badge">
+                        <i class="fa-solid fa-shield-halved"></i> ${this.escapeHtml(classification)}
+                      </span>
+                    </div>
+
+                    <!-- Markdown rendered response text without truncation -->
+                    <div class="ticket-markdown-container">
+                      ${this.renderSafeMarkdown(ans.answer_text)}
+                    </div>
+
+                    ${ansAttsHtml}
+                  </div>
+                `;
+              }).join('')}
+
+              <!-- Modal Rating Box for the ticket -->
+              <div style="margin-top: 0.75rem; padding: 0.85rem 1rem; background: rgba(16, 185, 129, 0.05); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: var(--radius-md); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
+                <div>
+                  <div style="font-size: 0.84rem; font-weight: 800; color: var(--text-primary);">
+                    ${d.rating > 0 ? `✓ Student Rating: ${d.rating} / 5 Stars (Locked)` : 'Rate Mentor\'s Solution:'}
+                  </div>
+                  <div style="font-size: 0.72rem; color: var(--text-muted); margin-top: 0.15rem;">
+                    ${d.rating > 0 ? (d.rating >= 3 ? `🎉 +${d.reward_credits || 0.5} Cr bounty credited to mentor!` : `⭐ Rating recorded (${d.rating} Stars).`) : '3★ or higher releases mentor credit reward.'}
+                  </div>
                 </div>
-              ` : `
-                <div class="support-star-rating">
-                  ${[1, 2, 3, 4, 5].map(star => `
-                    <button type="button" class="star-btn" onclick="window.app.rateSupportTicket('${doubt.id}', ${star}); window.app.closeModal('viewFullDoubtModal');" title="Rate ${star} Stars">
-                      <i class="fa-${(doubt.rating || 0) >= star ? 'solid' : 'regular'} fa-star" style="color: #f59e0b; font-size: 1.25rem;"></i>
-                    </button>
-                  `).join('')}
-                </div>
-              `}
+                ${d.rating > 0 ? `
+                  <div style="display: flex; gap: 0.25rem; align-items: center;" title="Rating Locked (${d.rating} Stars)">
+                    ${[1, 2, 3, 4, 5].map(star => `
+                      <i class="fa-${d.rating >= star ? 'solid' : 'regular'} fa-star" style="color: #f59e0b; font-size: 1.25rem;"></i>
+                    `).join('')}
+                  </div>
+                ` : `
+                  <div class="support-star-rating">
+                    ${[1, 2, 3, 4, 5].map(star => `
+                      <button type="button" class="star-btn" onclick="window.app.rateSupportTicket('${d.id}', ${star}); window.app.closeModal('viewFullDoubtModal');" title="Rate ${star} Stars">
+                        <i class="fa-${(d.rating || 0) >= star ? 'solid' : 'regular'} fa-star" style="color: #f59e0b; font-size: 1.25rem;"></i>
+                      </button>
+                    `).join('')}
+                  </div>
+                `}
+              </div>
             </div>
+          `;
+        } else if (d.status === 'IN_PROGRESS' || d.status === 'ACCEPTED' || d.status === 'CLAIMED') {
+          responsesHtml = `
+            <div style="background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.25); border-radius: 12px; padding: 1rem; color: #2563eb; display: flex; align-items: center; gap: 0.75rem; margin-top: 0.75rem;">
+              <i class="fa-solid fa-spinner fa-spin" style="font-size: 1.25rem;"></i>
+              <div style="font-size: 0.85rem;">
+                <strong>In Progress:</strong> A mentor has accepted this doubt and is actively preparing a solution.
+              </div>
+            </div>
+          `;
+        } else if (d.status === 'OPEN') {
+          responsesHtml = `
+            <div style="background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.25); border-radius: 12px; padding: 1rem; color: #d97706; display: flex; align-items: center; gap: 0.75rem; margin-top: 0.75rem;">
+              <i class="fa-solid fa-clock-rotate-left" style="font-size: 1.25rem;"></i>
+              <div style="font-size: 0.85rem;">
+                <strong>Open Doubt:</strong> Waiting for an eligible peer tutor or mentor to accept and respond.
+              </div>
+            </div>
+          `;
+        }
+
+        bodyEl.innerHTML = `
+          <div style="display: flex; flex-direction: column; gap: 1rem;">
+            <!-- Complete doubt description with full safe Markdown rendering -->
+            <div class="ticket-markdown-container">
+              ${this.renderSafeMarkdown(d.description)}
+            </div>
+
+            ${d.code_snippet ? `
+              <div style="margin-top: 0.5rem;">
+                <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.25rem;">Original Code Snippet:</div>
+                <pre class="support-code-box" style="margin: 0; max-height: 250px; overflow-y: auto;"><code>${this.escapeHtml(d.code_snippet)}</code></pre>
+              </div>
+            ` : ''}
+
+            ${attsHtml}
+            ${responsesHtml}
           </div>
         `;
+      };
+
+      // 1. Immediate local render if doubt is already in memory
+      if (doubt) {
+        renderModalContent(doubt);
+        this.openModal('viewFullDoubtModal');
+      } else {
+        if (titleEl) titleEl.textContent = 'Loading Doubt...';
+        if (bodyEl) bodyEl.innerHTML = '<div style="text-align: center; padding: 2rem;"><i class="fa-solid fa-spinner fa-spin" style="font-size: 1.5rem; color: #4f46e5;"></i><p style="margin-top: 0.5rem; font-size: 0.85rem; color: var(--text-muted);">Fetching complete ticket details...</p></div>';
+        this.openModal('viewFullDoubtModal');
       }
 
-      bodyEl.innerHTML = `
-        <div style="display: flex; flex-direction: column; gap: 0.75rem;">
-          <div style="font-size: 0.9rem; color: var(--text-primary); line-height: 1.5; white-space: pre-wrap;">
-            ${this.escapeHtml(doubt.description)}
-          </div>
-
-          ${doubt.code_snippet ? `
-            <div style="margin-top: 0.5rem;">
-              <div style="font-weight: 700; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.25rem;">Original Code Snippet:</div>
-              <pre class="support-code-box" style="margin: 0; max-height: 220px; overflow-y: auto;"><code>${this.escapeHtml(doubt.code_snippet)}</code></pre>
-            </div>
-          ` : ''}
-
-          ${attsHtml}
-          ${answerHtml}
-        </div>
-      `;
-
-      this.openModal('viewFullDoubtModal');
+      // 2. Fresh asynchronous fetch from backend for complete details & all answers
+      try {
+        if (window.store && typeof window.store.fetchSupportDoubtById === 'function') {
+          const freshDoubt = await window.store.fetchSupportDoubtById(doubtId);
+          if (freshDoubt) {
+            doubt = freshDoubt;
+            this.activeFullDoubt = freshDoubt;
+            // Update in local supportTickets array
+            const idx = (this.supportTickets || []).findIndex(t => t.id === doubtId);
+            if (idx !== -1) {
+              this.supportTickets[idx] = { ...this.supportTickets[idx], ...freshDoubt };
+            }
+            renderModalContent(freshDoubt);
+          }
+        }
+      } catch (err) {
+        console.error('[openViewFullDoubtModal] Error fetching fresh doubt details:', err);
+      }
     },
 
     previewDoubtAttachmentById(doubtId, attIndex) {
-      const doubt = (this.supportTickets || []).find(d => d.id === doubtId);
+      const doubt = this.activeFullDoubt || (this.supportTickets || []).find(d => d.id === doubtId);
       const att = doubt?.attachments?.[attIndex];
       if (att) this.openFilePreview(att);
     },
 
     downloadDoubtAttachmentById(doubtId, attIndex) {
-      const doubt = (this.supportTickets || []).find(d => d.id === doubtId);
+      const doubt = this.activeFullDoubt || (this.supportTickets || []).find(d => d.id === doubtId);
       const att = doubt?.attachments?.[attIndex];
+      if (!att) return;
+      if (att.id && !att.id.startsWith('local_')) {
+        window.store.downloadAttachment(att.id, att.file_name).catch(() => {
+          const a = document.createElement('a');
+          a.href = att.file_data;
+          a.download = att.file_name;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+        });
+      } else {
+        const a = document.createElement('a');
+        a.href = att.file_data;
+        a.download = att.file_name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }
+    },
+
+    previewAnswerAttachment(doubtId, ansIdx, attIdx) {
+      const doubt = this.activeFullDoubt || (this.supportTickets || []).find(d => d.id === doubtId);
+      let att = null;
+      if (doubt?.answers && doubt.answers[ansIdx]?.attachments) {
+        att = doubt.answers[ansIdx].attachments[attIdx];
+      } else {
+        att = doubt?.answer_attachments?.[attIdx] || doubt?.answers?.[0]?.attachments?.[attIdx];
+      }
+      if (att) this.openFilePreview(att);
+    },
+
+    downloadAnswerAttachment(doubtId, ansIdx, attIdx) {
+      const doubt = this.activeFullDoubt || (this.supportTickets || []).find(d => d.id === doubtId);
+      let att = null;
+      if (doubt?.answers && doubt.answers[ansIdx]?.attachments) {
+        att = doubt.answers[ansIdx].attachments[attIdx];
+      } else {
+        att = doubt?.answer_attachments?.[attIdx] || doubt?.answers?.[0]?.attachments?.[attIdx];
+      }
       if (!att) return;
       if (att.id && !att.id.startsWith('local_')) {
         window.store.downloadAttachment(att.id, att.file_name).catch(() => {
@@ -11821,32 +12047,11 @@
     },
 
     previewAnswerAttachmentById(doubtId, attIndex) {
-      const doubt = (this.supportTickets || []).find(d => d.id === doubtId);
-      const att = doubt?.answer_attachments?.[attIndex] || doubt?.answers?.[0]?.attachments?.[attIndex];
-      if (att) this.openFilePreview(att);
+      this.previewAnswerAttachment(doubtId, 0, attIndex);
     },
 
     downloadAnswerAttachmentById(doubtId, attIndex) {
-      const doubt = (this.supportTickets || []).find(d => d.id === doubtId);
-      const att = doubt?.answer_attachments?.[attIndex] || doubt?.answers?.[0]?.attachments?.[attIndex];
-      if (!att) return;
-      if (att.id && !att.id.startsWith('local_')) {
-        window.store.downloadAttachment(att.id, att.file_name).catch(() => {
-          const a = document.createElement('a');
-          a.href = att.file_data;
-          a.download = att.file_name;
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-        });
-      } else {
-        const a = document.createElement('a');
-        a.href = att.file_data;
-        a.download = att.file_name;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-      }
+      this.downloadAnswerAttachment(doubtId, 0, attIndex);
     },
 
     async refreshDynamicSupportSubjects() {

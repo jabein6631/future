@@ -1475,6 +1475,22 @@ class SkillSwapStore {
     return this.fetchSupportDoubts(filter);
   }
 
+  async fetchSupportDoubtById(id) {
+    if (!id) return null;
+    try {
+      const res = await fetch(`${this.apiBase}/support/doubts/${encodeURIComponent(id)}`, {
+        headers: this.getAuthHeaders()
+      });
+      const data = await res.json();
+      if (data.success && (data.doubt || data.ticket)) {
+        return data.doubt || data.ticket;
+      }
+    } catch (e) {
+      console.warn('Could not fetch support doubt by ID:', e.message);
+    }
+    return null;
+  }
+
   async checkSupportEligibility(skillName) {
     try {
       const res = await fetch(`${this.apiBase}/support/eligibility?skillName=${encodeURIComponent(skillName || '')}`, {

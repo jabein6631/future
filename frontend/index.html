@@ -3865,11 +3865,11 @@ function solveExercise() {
               style="font-weight: 700; font-size: 0.85rem; display: flex; align-items: center; gap: 0.4rem;">
               <i class="fa-solid fa-pen-to-square" style="color: #6366f1;"></i> Explain the Issue & What You Tried
             </label>
-            <textarea class="form-control" id="supportDescriptionInput" rows="3" maxlength="1000"
+            <textarea class="form-control" id="supportDescriptionInput" rows="3" maxlength="50000"
               placeholder="Describe the error, expected behavior, and what you have attempted so far..." required
               style="resize: vertical;"></textarea>
             <div style="text-align: right; font-size: 0.72rem; color: var(--text-muted); margin-top: 0.25rem;">
-              <span id="doubtDescCharCount">0</span>/1000
+              <span id="doubtDescCharCount">0</span> characters
             </div>
           </div>
 
@@ -4010,11 +4010,11 @@ function solveExercise() {
               style="font-weight: 700; font-size: 0.85rem; display: flex; align-items: center; gap: 0.4rem;">
               <i class="fa-solid fa-pen-nib" style="color: #10b981;"></i> Your Answer / Solution
             </label>
-            <textarea class="form-control" id="resolveSolutionInput" rows="5" maxlength="5000"
+            <textarea class="form-control" id="resolveSolutionInput" rows="5" maxlength="50000"
               placeholder="Explain the root cause, provide corrected code snippet or architectural explanation..."
               required style="resize: vertical;"></textarea>
             <div style="text-align: right; font-size: 0.72rem; color: var(--text-muted); margin-top: 0.25rem;">
-              <span id="answerCharCount">0</span>/5000
+              <span id="answerCharCount">0</span> characters
             </div>
           </div>
 
@@ -4150,7 +4150,7 @@ function solveExercise() {
   <!-- MODAL: VIEW FULL DOUBT & ATTACHMENTS       -->
   <!-- ========================================== -->
   <div class="modal-overlay" id="viewFullDoubtModal">
-    <div class="modal-content" style="max-width: 760px; max-height: 90vh; display: flex; flex-direction: column;">
+    <div class="modal-content" style="max-width: 840px; width: 95vw; max-height: 90vh; display: flex; flex-direction: column; border-radius: 20px; overflow: hidden;">
       <div class="modal-header" style="padding: 1.25rem 1.5rem 1rem;">
         <div style="display: flex; align-items: center; gap: 0.75rem;">
           <div
