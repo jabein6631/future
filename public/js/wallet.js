@@ -421,15 +421,39 @@ class SkillSwapStore {
       });
       const data = await res.json();
       if (data.success && Array.isArray(data.certificates)) {
+        // Deduplicate certificates by credential_id with status priority
+        const getRank = (c) => {
+          const s = (c.certificate_status || c.verification_status || (c.is_verified === 1 ? 'VERIFIED' : 'NOT_VERIFIED')).toUpperCase().trim();
+          if (s === 'VERIFIED' || c.is_verified === 1) return 4;
+          if (s === 'PENDING' || s === 'PENDING_VERIFICATION' || s === 'NEEDS_MANUAL_REVIEW' || s === 'PENDING_FACULTY') return 3;
+          if (s === 'NOT_VERIFIED') return 2;
+          if (s === 'REJECTED' || c.is_verified === -1) return 1;
+          return 0;
+        };
+        const map = new Map();
+        for (const cert of data.certificates) {
+          const rawId = (cert.credential_id || cert.id || '').trim().toLowerCase();
+          const key = rawId ? `${cert.user_id || activeId}:::${rawId}` : cert.id;
+          if (!map.has(key)) {
+            map.set(key, cert);
+          } else {
+            const existing = map.get(key);
+            if (getRank(cert) > getRank(existing)) {
+              map.set(key, cert);
+            }
+          }
+        }
+        const uniqueCerts = Array.from(map.values());
+
         if (this.currentUser) {
-          this.currentUser.certificates = data.certificates;
+          this.currentUser.certificates = uniqueCerts;
         }
         if (this.personas[activeId]) {
-          this.personas[activeId].certificates = data.certificates;
+          this.personas[activeId].certificates = uniqueCerts;
         } else {
-          this.personas[activeId] = { certificates: data.certificates };
+          this.personas[activeId] = { certificates: uniqueCerts };
         }
-        return data.certificates;
+        return uniqueCerts;
       }
     } catch (e) {
       console.warn('Backend fetch certificates warning:', e);

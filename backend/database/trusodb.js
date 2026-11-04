@@ -2848,15 +2848,13 @@ const dbProvider = {
     const user = await db.getAsync(`SELECT id, name, email, is_verified FROM users WHERE id = ?`, [userId]);
     if (!user) return null;
 
-    const latestCert = await db.getAsync(
-      `SELECT * FROM certificates WHERE user_id = ? ORDER BY created_at DESC LIMIT 1`,
-      [userId]
-    );
+    const certs = await this.getCertificates(userId);
+    const latestCert = certs.length > 0 ? certs[0] : null;
 
     if (!latestCert) {
       return {
         hasCertificate: false,
-        status: 'PENDING_VERIFICATION',
+        status: 'NOT_VERIFIED',
         verificationStatus: 'NOT_SUBMITTED',
         tutor_eligible: 0,
         is_verified: user.is_verified || 0,
@@ -2875,12 +2873,24 @@ const dbProvider = {
       }
     }
 
+    const rawStatus = (latestCert.certificate_status || latestCert.verification_status || (latestCert.is_verified === 1 ? 'VERIFIED' : 'NOT_VERIFIED')).toUpperCase().trim();
+    let finalStatus = 'NOT_VERIFIED';
+    if (rawStatus === 'VERIFIED' || latestCert.is_verified === 1) {
+      finalStatus = 'VERIFIED';
+    } else if (rawStatus === 'REJECTED' || rawStatus.includes('REJECT') || latestCert.is_verified === -1) {
+      finalStatus = 'REJECTED';
+    } else if (rawStatus === 'PENDING' || rawStatus === 'PENDING_VERIFICATION' || rawStatus === 'NEEDS_MANUAL_REVIEW' || rawStatus === 'PENDING_FACULTY') {
+      finalStatus = 'PENDING';
+    } else {
+      finalStatus = 'NOT_VERIFIED';
+    }
+
     return {
       hasCertificate: true,
       certId: latestCert.id,
-      status: latestCert.certificate_status || (latestCert.is_verified ? 'VERIFIED' : 'NOT_VERIFIED'),
-      verificationStatus: latestCert.verification_status || (latestCert.is_verified ? 'VERIFIED' : 'PENDING_VERIFICATION'),
-      tutor_eligible: latestCert.tutor_eligible != null ? latestCert.tutor_eligible : (latestCert.is_verified ? 1 : 0),
+      status: finalStatus,
+      verificationStatus: latestCert.verification_status || finalStatus,
+      tutor_eligible: latestCert.tutor_eligible != null ? latestCert.tutor_eligible : (finalStatus === 'VERIFIED' ? 1 : 0),
       is_verified: user.is_verified || 0,
       verification_method: latestCert.verification_method || 'AUTOMATED_VERIFICATION',
       verification_reason: latestCert.verification_reason || '',
@@ -2891,10 +2901,48 @@ const dbProvider = {
   },
 
   async getCertificates(userId) {
+    let rows;
     if (userId) {
-      return await db.allAsync(`SELECT * FROM certificates WHERE user_id = ? ORDER BY created_at DESC`, [userId]);
+      rows = await db.allAsync(`SELECT * FROM certificates WHERE user_id = ? ORDER BY created_at DESC`, [userId]);
+    } else {
+      rows = await db.allAsync(`SELECT * FROM certificates ORDER BY created_at DESC`);
     }
-    return await db.allAsync(`SELECT * FROM certificates ORDER BY created_at DESC`);
+
+    if (!Array.isArray(rows) || rows.length === 0) return [];
+
+    // Helper to score certificate status priority for deduplication
+    const getRank = (c) => {
+      const s = (c.certificate_status || c.verification_status || (c.is_verified === 1 ? 'VERIFIED' : 'NOT_VERIFIED')).toUpperCase().trim();
+      if (s === 'VERIFIED' || c.is_verified === 1) return 4;
+      if (s === 'PENDING' || s === 'PENDING_VERIFICATION' || s === 'NEEDS_MANUAL_REVIEW' || s === 'PENDING_FACULTY') return 3;
+      if (s === 'NOT_VERIFIED') return 2;
+      if (s === 'REJECTED' || c.is_verified === -1) return 1;
+      return 0;
+    };
+
+    // Deduplicate by (user_id, credential_id)
+    const map = new Map();
+    for (const r of rows) {
+      const credId = (r.credential_id || '').trim().toLowerCase();
+      const uId = r.user_id || '';
+      const key = credId ? `${uId}:::${credId}` : `id:::${r.id}`;
+
+      if (!map.has(key)) {
+        map.set(key, r);
+      } else {
+        const existing = map.get(key);
+        if (getRank(r) > getRank(existing)) {
+          map.set(key, r);
+        } else if (getRank(r) === getRank(existing)) {
+          const tNew = new Date(r.created_at || 0).getTime();
+          const tOld = new Date(existing.created_at || 0).getTime();
+          if (tNew > tOld) {
+            map.set(key, r);
+          }
+        }
+      }
+    }
+    return Array.from(map.values());
   },
 
   async uploadCertificate(userId, data) {
@@ -3029,7 +3077,7 @@ const dbProvider = {
       fileData
     });
 
-    const certId = 'cert_' + Date.now();
+    let certId = 'cert_' + Date.now();
     const finalAuthority = verifResult.issuer || authority;
     const finalCredentialId = verifResult.credential_id || credentialId || ('CERT-' + Date.now());
     const finalScoreOrGrade = verifResult.score_or_grade || scoreOrGrade || 'Grade Verified';
@@ -3041,46 +3089,106 @@ const dbProvider = {
     const finalEvidenceJson = JSON.stringify(verifResult.evidence_json || verifResult.verification_evidence || verifResult.evidence || {});
     const verifiedAt = finalStatus === 'VERIFIED' ? new Date().toISOString() : null;
 
-    // Insert Certificate record with complete verification metrics
-    await db.runAsync(
-      `INSERT INTO certificates (
-        id, user_id, skill_name, authority, title, credential_id, credential_url, score_or_grade,
-        is_verified, certificate_status, verification_status, tutor_eligible, verification_method,
-        verification_reason, verification_evidence, certificate_file_hash, verified_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        certId,
-        userId,
-        skillName,
-        finalAuthority,
-        title,
-        finalCredentialId,
-        verifResult.verification_url || data.credentialUrl || 'https://nptel.ac.in',
-        finalScoreOrGrade,
-        finalTutorEligible, // is_verified aligns strictly with tutor_eligible
-        finalStatus,
-        finalVerificationStatus,
-        finalTutorEligible,
-        finalMethod,
-        finalReason,
-        finalEvidenceJson,
-        fileHash,
-        verifiedAt
-      ]
-    );
+    // Check if THIS user already has a certificate with this credential_id
+    let existingCert = null;
+    if (finalCredentialId && finalCredentialId !== 'N/A' && !finalCredentialId.startsWith('CERT-')) {
+      existingCert = await db.getAsync(
+        `SELECT * FROM certificates WHERE user_id = ? AND credential_id = ?`,
+        [userId, finalCredentialId]
+      );
+    }
 
-    // Update user's is_verified status based on tutor eligibility
+    // If already verified and user re-submits without error, return existing verified certificate
+    if (existingCert && (existingCert.certificate_status === 'VERIFIED' || existingCert.is_verified === 1) && finalStatus !== 'VERIFIED') {
+      return {
+        success: true,
+        isDuplicate: true,
+        status: 'VERIFIED',
+        verification_status: 'VERIFIED',
+        tutor_eligible: 1,
+        is_verified: 1,
+        certId: existingCert.id,
+        certificate: existingCert,
+        message: `Certificate ID "${finalCredentialId}" is already registered and verified for your account.`
+      };
+    }
+
+    if (existingCert) certId = existingCert.id;
+
+    if (existingCert) {
+      // Update existing record in-place instead of creating duplicate row!
+      await db.runAsync(
+        `UPDATE certificates SET
+          skill_name = ?, authority = ?, title = ?, credential_id = ?, credential_url = ?, score_or_grade = ?,
+          is_verified = ?, certificate_status = ?, verification_status = ?, tutor_eligible = ?, verification_method = ?,
+          verification_reason = ?, verification_evidence = ?, certificate_file_hash = ?, verified_at = ?
+         WHERE id = ?`,
+        [
+          skillName,
+          finalAuthority,
+          title,
+          finalCredentialId,
+          verifResult.verification_url || data.credentialUrl || 'https://nptel.ac.in',
+          finalScoreOrGrade,
+          finalTutorEligible,
+          finalStatus,
+          finalVerificationStatus,
+          finalTutorEligible,
+          finalMethod,
+          finalReason,
+          finalEvidenceJson,
+          fileHash,
+          verifiedAt,
+          existingCert.id
+        ]
+      );
+    } else {
+      // Insert new Certificate record with complete verification metrics
+      await db.runAsync(
+        `INSERT INTO certificates (
+          id, user_id, skill_name, authority, title, credential_id, credential_url, score_or_grade,
+          is_verified, certificate_status, verification_status, tutor_eligible, verification_method,
+          verification_reason, verification_evidence, certificate_file_hash, verified_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          certId,
+          userId,
+          skillName,
+          finalAuthority,
+          title,
+          finalCredentialId,
+          verifResult.verification_url || data.credentialUrl || 'https://nptel.ac.in',
+          finalScoreOrGrade,
+          finalTutorEligible,
+          finalStatus,
+          finalVerificationStatus,
+          finalTutorEligible,
+          finalMethod,
+          finalReason,
+          finalEvidenceJson,
+          fileHash,
+          verifiedAt
+        ]
+      );
+    }
+
+    // Update user's is_verified status based on tutor eligibility across all user's certificates
+    const anyVerified = await db.getAsync(
+      `SELECT id FROM certificates WHERE user_id = ? AND (is_verified = 1 OR certificate_status = 'VERIFIED')`,
+      [userId]
+    );
+    const userIsVerified = anyVerified ? 1 : finalTutorEligible;
     await db.runAsync(
       `UPDATE users SET is_verified = ? WHERE id = ?`,
-      [finalTutorEligible, userId]
+      [userIsVerified, userId]
     );
 
     // Audit trail logging
     try {
       await db.runAsync(
-        `INSERT INTO certificate_verifications (id, user_id, credential_id, skill_name, result, confidence, ai_report_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        ['verif_' + Date.now() + '_' + Math.floor(Math.random() * 1000), userId, finalCredentialId, skillName, finalStatus, verifResult.confidence || 90, JSON.stringify(verifResult)]
+        `INSERT INTO certificate_verifications (id, certificate_id, verified_by, status, user_id, credential_id, skill_name, result, confidence, ai_report_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ['verif_' + Date.now() + '_' + Math.floor(Math.random() * 1000), certId, finalMethod || 'AUTOMATED_ANALYSIS', finalStatus, userId, finalCredentialId, skillName, finalStatus, verifResult.confidence || 90, JSON.stringify(verifResult)]
       );
     } catch (e) {}
 

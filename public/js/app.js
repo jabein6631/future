@@ -2622,10 +2622,16 @@
       // Form Submission Handler
       form?.addEventListener('submit', async (e) => {
         e.preventDefault();
+        if (this._isSubmittingCert) {
+          console.warn("[Certificate] Submission already in flight, ignoring duplicate event.");
+          return;
+        }
+        this._isSubmittingCert = true;
         console.log("[Certificate] Form submit triggered");
 
         const selectedPlatform = document.querySelector('input[name="certPlatform"]:checked')?.value || 'NPTEL';
         if (selectedPlatform !== 'NPTEL' && selectedPlatform !== 'Other') {
+          this._isSubmittingCert = false;
           this.showToast('Please select a valid certificate platform (NPTEL or Other)', 'lock');
           return;
         }
@@ -2633,6 +2639,7 @@
         const courseInput = document.getElementById('pageCertCourseName');
         const courseName = courseInput?.value.trim();
         if (!courseName) {
+          this._isSubmittingCert = false;
           this.showToast('Please enter the certificate/course name', 'lock');
           courseInput?.focus();
           return;
@@ -2646,6 +2653,7 @@
         console.log("[Certificate] Selected file:", fileObj);
 
         if (!fileObj) {
+          this._isSubmittingCert = false;
           this.showToast('Please choose or drag and drop a certificate file to upload', 'lock');
           const dropzone = document.getElementById('pageCertDropzone');
           if (dropzone) {
@@ -2819,6 +2827,7 @@
           console.error('[Certificate] Submission error:', err);
           this.showToast('Certificate verification could not be started: ' + err.message, 'lock');
         } finally {
+          this._isSubmittingCert = false;
           if (submitBtn) {
             submitBtn.innerHTML = origSubmitText;
             submitBtn.disabled = false;
@@ -7556,10 +7565,11 @@
         const data = await res.json();
 
         if (data.success) {
-          const status = data.status || 'PENDING_VERIFICATION';
-          const isVerified = status === 'VERIFIED';
-          const isNotVerified = status === 'NOT_VERIFIED';
-          const isManual = status === 'NEEDS_MANUAL_REVIEW';
+          const rawStatus = (data.status || data.verificationStatus || (data.hasCertificate ? 'NOT_VERIFIED' : 'NOT_SUBMITTED')).toUpperCase().trim();
+          const isVerified = rawStatus === 'VERIFIED' || data.is_verified === 1;
+          const isRejected = rawStatus === 'REJECTED' || rawStatus.includes('REJECT') || data.is_verified === -1;
+          const isManual = rawStatus === 'PENDING' || rawStatus === 'PENDING_VERIFICATION' || rawStatus === 'NEEDS_MANUAL_REVIEW' || rawStatus === 'PENDING_FACULTY';
+          const isNotVerified = rawStatus === 'NOT_VERIFIED' || (!isVerified && !isRejected && !isManual);
 
           if (isVerified) {
             if (card) {
@@ -7662,21 +7672,11 @@
         evidence = cert.verification_evidence;
       }
 
-      const rawStatus = (cert.certificate_status || cert.verification_status || cert.status || '').toUpperCase();
-      let status = 'PENDING_VERIFICATION';
-      if (rawStatus === 'VERIFIED' || cert.is_verified === 1) {
-        status = 'VERIFIED';
-      } else if (rawStatus === 'NOT_VERIFIED' || cert.verification_result === 'FAKE' || cert.is_verified === -1) {
-        status = 'NOT_VERIFIED';
-      } else if (rawStatus === 'NEEDS_MANUAL_REVIEW' || rawStatus === 'NEEDS_REVIEW' || rawStatus === 'PENDING_FACULTY') {
-        status = 'NEEDS_MANUAL_REVIEW';
-      } else if (cert.is_verified === 0 && (cert.verification_reason || cert.rejection_reason)) {
-        status = 'NOT_VERIFIED';
-      }
-
+      const status = this.getCertificateStatus(cert);
       const isVerified = status === 'VERIFIED';
+      const isRejected = status === 'REJECTED';
       const isNotVerified = status === 'NOT_VERIFIED';
-      const isNeedsReview = status === 'NEEDS_MANUAL_REVIEW';
+      const isNeedsReview = status === 'PENDING';
 
       const certTitle = cert.title || cert.skill_name || 'Academic Certificate';
       const certAuthority = cert.authority || cert.issuer || cert.platform || 'NPTEL';
@@ -7979,6 +7979,67 @@
       }
     },
 
+        getCertificateStatus(c) {
+      if (!c) return 'NOT_VERIFIED';
+      const raw = (c.certificate_status || c.verification_status || c.status || '').toUpperCase().trim();
+      if (raw === 'VERIFIED' || c.is_verified === 1) {
+        return 'VERIFIED';
+      }
+      if (raw === 'REJECTED' || raw.includes('REJECT') || c.is_verified === -1) {
+        return 'REJECTED';
+      }
+      if (
+        raw === 'PENDING' ||
+        raw === 'PENDING_VERIFICATION' ||
+        raw === 'NEEDS_MANUAL_REVIEW' ||
+        raw === 'NEEDS_REVIEW' ||
+        raw === 'PENDING_FACULTY' ||
+        raw === 'UNDER_REVIEW'
+      ) {
+        return 'PENDING';
+      }
+      if (raw === 'NOT_VERIFIED') {
+        return 'NOT_VERIFIED';
+      }
+      return 'NOT_VERIFIED';
+    },
+
+    deduplicateCertificates(certList, currentUserId) {
+      if (!Array.isArray(certList) || certList.length === 0) return [];
+
+      const getRank = (c) => {
+        const s = this.getCertificateStatus(c);
+        if (s === 'VERIFIED') return 4;
+        if (s === 'PENDING') return 3;
+        if (s === 'NOT_VERIFIED') return 2;
+        if (s === 'REJECTED') return 1;
+        return 0;
+      };
+
+      const map = new Map();
+      for (const c of certList) {
+        const rawId = (c.credential_id || c.certificateId || c.id || '').trim();
+        const userId = c.user_id || currentUserId || '';
+        const key = rawId ? `${userId}:::${rawId.toLowerCase()}` : `id:::${c.id}`;
+
+        if (!map.has(key)) {
+          map.set(key, c);
+        } else {
+          const existing = map.get(key);
+          if (getRank(c) > getRank(existing)) {
+            map.set(key, c);
+          } else if (getRank(c) === getRank(existing)) {
+            const timeC = new Date(c.created_at || c.uploaded_at || 0).getTime();
+            const timeE = new Date(existing.created_at || existing.uploaded_at || 0).getTime();
+            if (timeC > timeE) {
+              map.set(key, c);
+            }
+          }
+        }
+      }
+      return Array.from(map.values());
+    },
+
     /**
      * Render Certificates & Portfolio (view-profile)
      * Strictly renders the authenticated user's profile, qualifications,
@@ -8035,10 +8096,11 @@
       if (dbStatusEl) dbStatusEl.textContent = 'Turso Cloud Synced';
 
       // 2. Determine Tutor Tier & Badge
-      const certs = Array.isArray(user.certificates) ? user.certificates : (await window.store.fetchCertificates(user.id) || []);
+      const rawCerts = Array.isArray(user.certificates) ? user.certificates : (await window.store.fetchCertificates(user.id) || []);
+      const certs = this.deduplicateCertificates(rawCerts, user.id);
       const quizAttempts = Array.isArray(user.quizAttempts) ? user.quizAttempts : [];
       const hasPassedQuiz = quizAttempts.some(a => a.passed === 1 || (a.score_percent !== undefined && a.score_percent >= 70));
-      const hasVerifiedCert = certs.some(c => c.is_verified === 1 || c.verification_status === 'VERIFIED');
+      const hasVerifiedCert = certs.some(c => this.getCertificateStatus(c) === 'VERIFIED');
 
       let tierBadgeText = '🎓 Student Learner';
       let tierBadgeBg = 'rgba(100, 116, 139, 0.15)';
@@ -8106,19 +8168,45 @@
           `;
         } else {
           certGrid.innerHTML = certs.map(c => {
-            const isVerified = c.is_verified === 1 || c.verification_status === 'VERIFIED';
+            const status = this.getCertificateStatus(c);
+            const isVerified = status === 'VERIFIED';
+            const isPending = status === 'PENDING';
+            const isRejected = status === 'REJECTED';
+            const isNotVerified = status === 'NOT_VERIFIED';
+
+            let badgeHtml = '';
+            let cardBorder = 'var(--border-subtle)';
+            let boostHtml = '';
+
+            if (isVerified) {
+              badgeHtml = `<span style="font-size: 0.68rem; font-weight: 800; padding: 0.18rem 0.55rem; border-radius: var(--radius-sm); background: rgba(16, 185, 129, 0.15); color: #059669; border: 1px solid rgba(16, 185, 129, 0.3); white-space: nowrap;"><i class="fa-solid fa-circle-check"></i> VERIFIED</span>`;
+              cardBorder = 'rgba(16, 185, 129, 0.35)';
+              boostHtml = `<span style="color: #059669; font-weight: 700;"><i class="fa-solid fa-shield-check"></i> +2.0 Cr Tutor Boost</span>`;
+            } else if (isPending) {
+              badgeHtml = `<span style="font-size: 0.68rem; font-weight: 800; padding: 0.18rem 0.55rem; border-radius: var(--radius-sm); background: rgba(245, 158, 11, 0.15); color: #d97706; border: 1px solid rgba(245, 158, 11, 0.3); white-space: nowrap;"><i class="fa-solid fa-clock"></i> PENDING</span>`;
+              cardBorder = 'rgba(245, 158, 11, 0.35)';
+              boostHtml = `<span style="color: #d97706; font-weight: 600;"><i class="fa-regular fa-clock"></i> Pending Review</span>`;
+            } else if (isRejected) {
+              badgeHtml = `<span style="font-size: 0.68rem; font-weight: 800; padding: 0.18rem 0.55rem; border-radius: var(--radius-sm); background: rgba(185, 28, 28, 0.15); color: #b91c1c; border: 1px solid rgba(185, 28, 28, 0.3); white-space: nowrap;"><i class="fa-solid fa-ban"></i> REJECTED</span>`;
+              cardBorder = 'rgba(220, 38, 38, 0.35)';
+              boostHtml = `<span style="color: #b91c1c; font-weight: 600;"><i class="fa-solid fa-triangle-exclamation"></i> Verification Failed</span>`;
+            } else {
+              badgeHtml = `<span style="font-size: 0.68rem; font-weight: 800; padding: 0.18rem 0.55rem; border-radius: var(--radius-sm); background: rgba(239, 68, 68, 0.12); color: #dc2626; border: 1px solid rgba(239, 68, 68, 0.25); white-space: nowrap;"><i class="fa-solid fa-circle-xmark"></i> NOT VERIFIED</span>`;
+              cardBorder = 'rgba(239, 68, 68, 0.25)';
+              boostHtml = `<span style="color: #94a3b8; font-weight: 600;"><i class="fa-solid fa-lock"></i> Boost Locked</span>`;
+            }
+
             const title = this.escapeHtml(c.title || c.skill_name || 'Academic Credential');
             const issuer = this.escapeHtml(c.authority || c.issuer || 'NPTEL / External Body');
             const credId = this.escapeHtml(c.credential_id || c.id || '');
             const score = this.escapeHtml(c.score_or_grade || 'Passed');
+
             return `
-              <div style="background: var(--bg-subtle); border: 1.5px solid ${isVerified ? 'rgba(16, 185, 129, 0.3)' : 'var(--border-subtle)'}; border-radius: var(--radius-lg); padding: 1.15rem; display: flex; flex-direction: column; justify-content: space-between; gap: 0.75rem;">
+              <div style="background: var(--bg-subtle); border: 1.5px solid ${cardBorder}; border-radius: var(--radius-lg); padding: 1.15rem; display: flex; flex-direction: column; justify-content: space-between; gap: 0.75rem;">
                 <div>
                   <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 0.5rem; margin-bottom: 0.4rem;">
                     <div style="font-weight: 800; font-size: 0.92rem; color: var(--text-primary); line-height: 1.35;">${title}</div>
-                    <span style="font-size: 0.68rem; font-weight: 800; padding: 0.15rem 0.5rem; border-radius: var(--radius-sm); background: ${isVerified ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)'}; color: ${isVerified ? '#059669' : '#d97706'}; white-space: nowrap;">
-                      ${isVerified ? '✓ VERIFIED' : '⏳ PENDING'}
-                    </span>
+                    ${badgeHtml}
                   </div>
                   <div style="font-size: 0.76rem; color: var(--text-secondary); margin-bottom: 0.2rem;">
                     <i class="fa-solid fa-building-columns"></i> ${issuer}
@@ -8127,7 +8215,7 @@
                 </div>
                 <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px dashed var(--border-subtle); padding-top: 0.5rem; font-size: 0.74rem;">
                   <span style="color: var(--text-muted);">Grade: <strong style="color: var(--text-primary);">${score}</strong></span>
-                  <span style="color: #059669; font-weight: 700;">+2.0 Cr Tutor Boost</span>
+                  ${boostHtml}
                 </div>
               </div>
             `;
