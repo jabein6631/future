@@ -3571,21 +3571,10 @@
       // Ensure the chosen date and time are validated against the current local time
       if (date && time) {
         try {
-          let hours = 0;
-          let minutes = 0;
-          if (time.includes(':')) {
-            const parts = time.split(':');
-            hours = parseInt(parts[0], 10);
-            const rest = parts[1].trim();
-            minutes = parseInt(rest.slice(0, 2), 10);
-            if (rest.toUpperCase().includes('PM') && hours < 12) hours += 12;
-            if (rest.toUpperCase().includes('AM') && hours === 12) hours = 0;
-          }
-          const [y, m, d] = date.split('-').map(Number);
-          const selectedDateTime = new Date(y, m - 1, d, hours, minutes, 0, 0);
-          const now = new Date();
+          const selectedStartMs = this.computeScheduledStartMs(date, time, 'Asia/Kolkata');
+          const nowMs = Date.now();
 
-          if (selectedDateTime <= now) {
+          if (selectedStartMs < nowMs - 2 * 60 * 1000) {
             alert('The masterclass start time cannot be in the past. Please select a future date and time.');
             document.getElementById('mcTimePickerBtn')?.focus();
             return;
@@ -3608,6 +3597,9 @@
       if (prevJoinBtn) prevJoinBtn.disabled = true;
 
       try {
+        const scheduled_start_ms = this.computeScheduledStartMs(date, time, 'Asia/Kolkata');
+        const scheduled_end_ms = scheduled_start_ms + Math.round(durationHours * 3600000);
+
         if (this.editingMasterclassId) {
           // UPDATE EXISTING MASTERCLASS
           const updatePayload = {
@@ -3618,6 +3610,9 @@
             date,
             time,
             hours: durationHours,
+            scheduled_start_ms,
+            scheduled_end_ms,
+            timezone: 'Asia/Kolkata',
             platform,
             meeting_platform: platform,
             max_capacity: maxParticipants,
@@ -3672,6 +3667,9 @@
           date,
           time,
           durationHours,
+          scheduled_start_ms,
+          scheduled_end_ms,
+          timezone: 'Asia/Kolkata',
           platform,
           meeting_platform: platform,
           maxParticipants,
@@ -4850,6 +4848,9 @@
       }
 
       try {
+        const scheduled_start_ms = this.computeScheduledStartMs(this.bookingState.date, this.bookingState.time, 'Asia/Kolkata');
+        const scheduled_end_ms = scheduled_start_ms + Math.round(Number(this.bookingState.durationHours || 1) * 3600000);
+
         const payload = {
           mentorId: this.bookingState.mentor?.id,
           subject: this.bookingState.subject,
@@ -4857,6 +4858,9 @@
           date: this.bookingState.date,
           time: this.bookingState.time,
           durationHours: this.bookingState.durationHours,
+          scheduled_start_ms,
+          scheduled_end_ms,
+          timezone: 'Asia/Kolkata',
           title: this.bookingState.title,
           description: this.bookingState.description,
           sessionType: this.bookingState.sessionType,
@@ -5283,7 +5287,7 @@
             // Host Actions
             const timing = this.getScheduledTiming(sess);
             const isCompletedSess = isCompleted || timing.isPastEnd;
-            const isUpcomingSess = !isCompletedSess && !timing.isStarted;
+            const isUpcomingSess = !isCompletedSess && !timing.canJoin;
 
             if (isCompletedSess) {
               actionBtnContainer.innerHTML = `
@@ -5296,7 +5300,7 @@
               `;
             } else if (isUpcomingSess) {
               actionBtnContainer.innerHTML = `
-                <div class="session-countdown-pill" data-session-countdown-start="${timing.startTime}" style="margin-bottom: 0.75rem; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 0.85rem; font-weight: 700; color: #2563eb; background: #eff6ff; padding: 8px 14px; border-radius: 10px; border: 1px solid #bfdbfe;">
+                <div class="session-countdown-pill" data-session-id="${sess.id}" data-session-countdown-start="${timing.startTime}" style="margin-bottom: 0.75rem; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 0.85rem; font-weight: 700; color: #2563eb; background: #eff6ff; padding: 8px 14px; border-radius: 10px; border: 1px solid #bfdbfe;">
                   <i class="fa-regular fa-clock"></i> Starts in ${this.formatCountdown(timing.startsInMs)} (Opens at ${sess.time})
                 </div>
                 <button type="button" class="btn btn-secondary" disabled style="width: 100%; opacity: 0.7; cursor: not-allowed; padding: 0.75rem; font-weight: 700;">
@@ -5318,9 +5322,9 @@
                 </button>
               `;
             } else {
-              // Live Now
+              // Live Now / Starting Now
               actionBtnContainer.innerHTML = `
-                <div class="session-countdown-pill" data-session-countdown-end="${timing.endTime}" style="margin-bottom: 0.75rem; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 0.85rem; font-weight: 700; color: #dc2626; background: #fef2f2; padding: 8px 14px; border-radius: 10px; border: 1px solid #fecaca;">
+                <div class="session-countdown-pill" data-session-id="${sess.id}" data-session-countdown-end="${timing.endTime}" style="margin-bottom: 0.75rem; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 0.85rem; font-weight: 700; color: #dc2626; background: #fef2f2; padding: 8px 14px; border-radius: 10px; border: 1px solid #fecaca;">
                   <i class="fa-solid fa-hourglass-half"></i> 🔴 LIVE NOW • ${this.formatCountdown(timing.remainingMs)} remaining
                 </div>
                 <button type="button" class="btn btn-emerald" style="width: 100%; background: #059669; color: #fff; font-weight: 700; padding: 0.75rem;" onclick="window.app.openLiveRoom('${sess.id}')">
@@ -5346,7 +5350,7 @@
             // Receiver / Student Actions
             const timing = this.getScheduledTiming(sess);
             const isCompletedSess = isCompleted || timing.isPastEnd;
-            const isUpcomingSess = !isCompletedSess && !timing.isStarted;
+            const isUpcomingSess = !isCompletedSess && !timing.canJoin;
 
             if (isCompletedSess) {
               actionBtnContainer.innerHTML = `
@@ -5362,7 +5366,7 @@
               `;
             } else if (isUpcomingSess) {
               actionBtnContainer.innerHTML = `
-                <div class="session-countdown-pill" data-session-countdown-start="${timing.startTime}" style="margin-bottom: 0.75rem; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 0.85rem; font-weight: 700; color: #2563eb; background: #eff6ff; padding: 8px 14px; border-radius: 10px; border: 1px solid #bfdbfe;">
+                <div class="session-countdown-pill" data-session-id="${sess.id}" data-session-countdown-start="${timing.startTime}" style="margin-bottom: 0.75rem; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 0.85rem; font-weight: 700; color: #2563eb; background: #eff6ff; padding: 8px 14px; border-radius: 10px; border: 1px solid #bfdbfe;">
                   <i class="fa-regular fa-clock"></i> Starts in ${this.formatCountdown(timing.startsInMs)} (Opens at ${sess.time})
                 </div>
                 ${!isEnrolled ? `
@@ -5382,9 +5386,9 @@
                 </button>
               `;
             } else {
-              // Live Now for Student
+              // Live Now / Starting Now for Student
               actionBtnContainer.innerHTML = `
-                <div class="session-countdown-pill" data-session-countdown-end="${timing.endTime}" style="margin-bottom: 0.75rem; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 0.85rem; font-weight: 700; color: #dc2626; background: #fef2f2; padding: 8px 14px; border-radius: 10px; border: 1px solid #fecaca;">
+                <div class="session-countdown-pill" data-session-id="${sess.id}" data-session-countdown-end="${timing.endTime}" style="margin-bottom: 0.75rem; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 0.85rem; font-weight: 700; color: #dc2626; background: #fef2f2; padding: 8px 14px; border-radius: 10px; border: 1px solid #fecaca;">
                   <i class="fa-solid fa-hourglass-half"></i> 🔴 LIVE NOW • ${this.formatCountdown(timing.remainingMs)} remaining
                 </div>
                 ${!isEnrolled ? `
@@ -8546,13 +8550,64 @@
       });
     },
 
+    computeScheduledStartMs(dateStr, timeStr, timezone = 'Asia/Kolkata') {
+      if (!dateStr) return Date.now();
+      let year = 2026, month = 11, day = 4;
+      const cleanDate = String(dateStr).trim();
+      const dmyMatch = cleanDate.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
+      if (dmyMatch) {
+        day = parseInt(dmyMatch[1], 10);
+        month = parseInt(dmyMatch[2], 10);
+        year = parseInt(dmyMatch[3], 10);
+      } else {
+        const ymdMatch = cleanDate.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+        if (ymdMatch) {
+          year = parseInt(ymdMatch[1], 10);
+          month = parseInt(ymdMatch[2], 10);
+          day = parseInt(ymdMatch[3], 10);
+        } else {
+          const parsed = new Date(cleanDate);
+          if (!isNaN(parsed.getTime())) {
+            year = parsed.getFullYear();
+            month = parsed.getMonth() + 1;
+            day = parsed.getDate();
+          }
+        }
+      }
+
+      let hours = 9, minutes = 0;
+      const tStr = String(timeStr || '09:00 AM').trim();
+      const tMatch = tStr.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i);
+      if (tMatch) {
+        hours = parseInt(tMatch[1], 10);
+        minutes = parseInt(tMatch[2], 10);
+        const ampm = tMatch[4] ? tMatch[4].toUpperCase() : null;
+        if (ampm === 'PM' && hours < 12) hours += 12;
+        if (ampm === 'AM' && hours === 12) hours = 0;
+      } else {
+        const simpleMatch = tStr.match(/^(\d{1,2})\s*(AM|PM)?$/i);
+        if (simpleMatch) {
+          hours = parseInt(simpleMatch[1], 10);
+          const ampm = simpleMatch[2] ? simpleMatch[2].toUpperCase() : null;
+          if (ampm === 'PM' && hours < 12) hours += 12;
+          if (ampm === 'AM' && hours === 12) hours = 0;
+        }
+      }
+
+      let tzOffsetMs = 5.5 * 60 * 60 * 1000;
+      if (timezone === 'UTC' || timezone === 'GMT') {
+        tzOffsetMs = 0;
+      }
+      return Date.UTC(year, month - 1, day, hours, minutes, 0, 0) - tzOffsetMs;
+    },
+
     getScheduledTiming(session) {
       if (!session) return { startTime: 0, endTime: 0, isStarted: false, isPastEnd: false, isStartingNow: false, canJoin: false, statusText: 'Session completed', remainingMs: 0, startsInMs: 0 };
 
       let durationHours = 1.0;
-      if (session.hours != null) {
+      if (session.hours != null && !isNaN(Number(session.hours))) {
         durationHours = Number(session.hours);
-      } else if (session.durationHours != null) {
+      } else if (session.durationHours != null && !isNaN(Number(session.durationHours))) {
         durationHours = Number(session.durationHours);
       } else if (session.duration != null) {
         const dStr = String(session.duration).toLowerCase();
@@ -8568,59 +8623,30 @@
         }
       }
       if (isNaN(durationHours) || durationHours <= 0) durationHours = 1.0;
+      const durationMs = Math.round(durationHours * 3600000);
 
-      const dateStr = session.date || session.session_date || new Date().toISOString().split('T')[0];
-      const timeStr = session.time || session.start_time || '08:00 PM';
-
-      let year = 2026, month = 11, day = 4;
-      const cleanDateStr = String(dateStr).trim();
-
-      const dmyMatch = cleanDateStr.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
-      if (dmyMatch) {
-        day = parseInt(dmyMatch[1], 10);
-        month = parseInt(dmyMatch[2], 10);
-        year = parseInt(dmyMatch[3], 10);
+      let startMs = 0;
+      if (session.scheduled_start_ms && Number(session.scheduled_start_ms) > 0) {
+        startMs = Number(session.scheduled_start_ms);
+      } else if (session.timing && session.timing.startTime && Number(session.timing.startTime) > 0) {
+        startMs = Number(session.timing.startTime);
       } else {
-        const ymdMatch = cleanDateStr.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
-        if (ymdMatch) {
-          year = parseInt(ymdMatch[1], 10);
-          month = parseInt(ymdMatch[2], 10);
-          day = parseInt(ymdMatch[3], 10);
-        } else {
-          const dObj = new Date(cleanDateStr);
-          if (!isNaN(dObj.getTime())) {
-            year = dObj.getFullYear();
-            month = dObj.getMonth() + 1;
-            day = dObj.getDate();
-          }
-        }
+        const dateStr = session.date || session.session_date;
+        const timeStr = session.time || session.start_time;
+        startMs = this.computeScheduledStartMs(dateStr, timeStr, session.timezone || 'Asia/Kolkata');
       }
 
-      let hours = 20, minutes = 0;
-      const tMatch = String(timeStr).trim().match(/^(\d{1,2}):?(\d{2})?\s*(AM|PM)?$/i);
-      if (tMatch) {
-        hours = parseInt(tMatch[1], 10);
-        minutes = tMatch[2] ? parseInt(tMatch[2], 10) : 0;
-        const ampm = tMatch[3] ? tMatch[3].toUpperCase() : null;
-        if (ampm === 'PM' && hours < 12) hours += 12;
-        if (ampm === 'AM' && hours === 12) hours = 0;
-      }
+      const endMs = (session.scheduled_end_ms && Number(session.scheduled_end_ms) > 0)
+        ? Number(session.scheduled_end_ms)
+        : (startMs + durationMs);
 
-      // Always anchor strictly to Indian Standard Time (IST / Asia/Kolkata, UTC+05:30)
-      const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-      let startMs = Date.UTC(year, month - 1, day, hours, minutes, 0, 0) - IST_OFFSET_MS;
-      if (isNaN(startMs)) {
-        startMs = session.scheduled_start_ms ? Number(session.scheduled_start_ms) : (session.created_at ? new Date(session.created_at).getTime() : Date.now());
-      }
-
-      const endMs = startMs + Math.round(durationHours * 3600000);
       const nowMs = Date.now();
       const timeRemaining = startMs - nowMs;
       const isPastEnd = nowMs >= endMs;
       const isStarted = nowMs >= startMs;
       const START_WINDOW_MS = 5 * 60 * 1000; // 5 min early joining window
       const isStartingNow = !isStarted && timeRemaining <= START_WINDOW_MS && timeRemaining > 0;
-      const canJoin = isStarted || isStartingNow;
+      const canJoin = (isStarted || isStartingNow) && !isPastEnd;
 
       let statusText = 'Upcoming';
       if (isPastEnd) {
@@ -8630,7 +8656,7 @@
       } else if (isStartingNow) {
         statusText = 'Starting now';
       } else {
-        const totalSec = Math.floor(timeRemaining / 1000);
+        const totalSec = Math.floor(Math.max(0, timeRemaining) / 1000);
         const hrs = Math.floor(totalSec / 3600);
         const mins = Math.floor((totalSec % 3600) / 60);
         statusText = hrs > 0 ? `Starts in ${hrs}h ${mins}m` : `Starts in ${mins}m`;
@@ -8639,6 +8665,7 @@
       return {
         startTime: startMs,
         endTime: endMs,
+        durationHours,
         isStarted,
         isPastEnd,
         isStartingNow,
@@ -8768,17 +8795,59 @@
           if (startMs) {
             const diff = startMs - nowMs;
             if (diff <= 0) {
-              // Time has arrived: never display a future countdown
-              needsRerender = true;
-              el.innerHTML = `<i class="fa-solid fa-circle-dot" style="color: #ef4444;"></i> Session in progress`;
+              // Time has arrived: session is now LIVE
+              el.innerHTML = `<i class="fa-solid fa-circle-dot" style="color: #ef4444;"></i> 🔴 LIVE NOW`;
               el.style.background = '#fef2f2';
               el.style.color = '#dc2626';
               el.style.borderColor = '#fecaca';
+
+              // Dynamically unlock buttons in parent container
+              const parentCard = el.closest('.session-row-card, #mcDetailsActionButtons, .masterclass-card');
+              if (parentCard) {
+                const lockBtn = parentCard.querySelector('button[disabled]');
+                if (lockBtn && (lockBtn.textContent.includes('Opens at') || lockBtn.textContent.includes('Starts at'))) {
+                  lockBtn.disabled = false;
+                  lockBtn.className = 'btn btn-emerald btn-sm';
+                  lockBtn.style.background = '#059669';
+                  lockBtn.style.color = '#fff';
+                  lockBtn.style.opacity = '1';
+                  lockBtn.style.cursor = 'pointer';
+                  lockBtn.innerHTML = `<i class="fa-solid fa-video"></i> Enter Live Classroom`;
+                  const sid = el.getAttribute('data-session-id') || parentCard.getAttribute('data-session-id') || this.editingMasterclassId;
+                  if (sid) {
+                    lockBtn.onclick = () => window.app.openLiveRoom(sid);
+                  }
+                }
+              }
+
+              if (!el.dataset.transitionedToLive) {
+                el.dataset.transitionedToLive = 'true';
+                needsRerender = true;
+              }
             } else if (diff <= 5 * 60 * 1000) {
               el.innerHTML = `<i class="fa-solid fa-hourglass-start" style="color: #f59e0b;"></i> Starting now (${this.formatCountdown(diff)})`;
               el.style.background = '#fffbeb';
               el.style.color = '#b45309';
               el.style.borderColor = '#fde68a';
+
+              // Unlock 5-minute early window entry
+              const parentCard = el.closest('.session-row-card, #mcDetailsActionButtons, .masterclass-card');
+              if (parentCard) {
+                const lockBtn = parentCard.querySelector('button[disabled]');
+                if (lockBtn && (lockBtn.textContent.includes('Opens at') || lockBtn.textContent.includes('Starts at'))) {
+                  lockBtn.disabled = false;
+                  lockBtn.className = 'btn btn-emerald btn-sm';
+                  lockBtn.style.background = '#059669';
+                  lockBtn.style.color = '#fff';
+                  lockBtn.style.opacity = '1';
+                  lockBtn.style.cursor = 'pointer';
+                  lockBtn.innerHTML = `<i class="fa-solid fa-video"></i> Enter Classroom (Starting Now)`;
+                  const sid = el.getAttribute('data-session-id') || parentCard.getAttribute('data-session-id') || this.editingMasterclassId;
+                  if (sid) {
+                    lockBtn.onclick = () => window.app.openLiveRoom(sid);
+                  }
+                }
+              }
             } else {
               el.innerHTML = `<i class="fa-regular fa-clock"></i> Starts in ${this.formatCountdown(diff)}`;
             }
@@ -8790,11 +8859,14 @@
           if (endMs) {
             const diff = endMs - nowMs;
             if (diff <= 0) {
-              needsRerender = true;
               el.innerHTML = `<i class="fa-solid fa-circle-check" style="color: #10b981;"></i> Session completed`;
               el.style.background = '#f0fdf4';
               el.style.color = '#166534';
               el.style.borderColor = '#bbf7d0';
+              if (!el.dataset.transitionedToEnd) {
+                el.dataset.transitionedToEnd = 'true';
+                needsRerender = true;
+              }
             } else {
               el.innerHTML = `<i class="fa-solid fa-hourglass-half"></i> ${this.formatCountdown(diff)} remaining`;
             }
@@ -10043,7 +10115,7 @@
                   View Details
                 </button>
               ` : isUpcoming ? `
-                <div class="session-countdown-pill" data-session-countdown-start="${timing.startTime}" style="margin-right: 0.5rem; display: inline-flex; align-items: center; gap: 5px; font-size: 0.76rem; font-weight: 700; color: #2563eb; background: #eff6ff; padding: 4px 10px; border-radius: 9999px;">
+                <div class="session-countdown-pill" data-session-id="${sess.id}" data-session-countdown-start="${timing.startTime}" style="margin-right: 0.5rem; display: inline-flex; align-items: center; gap: 5px; font-size: 0.76rem; font-weight: 700; color: #2563eb; background: #eff6ff; padding: 4px 10px; border-radius: 9999px;">
                   <i class="fa-regular fa-clock"></i> Starts in ${this.formatCountdown(timing.startsInMs)}
                 </div>
                 ${isHost ? `
@@ -10072,7 +10144,7 @@
                   View Details
                 </button>
               ` : `
-                <div class="session-countdown-pill" data-session-countdown-end="${timing.endTime}" style="margin-right: 0.5rem; display: inline-flex; align-items: center; gap: 5px; font-size: 0.76rem; font-weight: 700; color: #dc2626; background: #fef2f2; padding: 4px 10px; border-radius: 9999px;">
+                <div class="session-countdown-pill" data-session-id="${sess.id}" data-session-countdown-end="${timing.endTime}" style="margin-right: 0.5rem; display: inline-flex; align-items: center; gap: 5px; font-size: 0.76rem; font-weight: 700; color: #dc2626; background: #fef2f2; padding: 4px 10px; border-radius: 9999px;">
                   <i class="fa-solid fa-hourglass-half"></i> ${this.formatCountdown(timing.remainingMs)} remaining
                 </div>
                 ${isHost ? `
@@ -11032,25 +11104,40 @@
 
       if (!session) {
         const sessions = window.store.sessions || await window.store.fetchSessions();
-        session = sessions.find(s => s.session_type === 'GROUP_COHORT' && s.status === 'Confirmed') ||
-          sessions.find(s => s.session_type === 'GROUP_COHORT') ||
-          sessions[0];
-        if (session) this.activeLiveRoomSessionId = session.id;
+        // Priority 1: User's session that can be joined right now
+        session = sessions.find(s => {
+          const t = this.getScheduledTiming(s);
+          const isParticipant = (s.teacher_id === currentPersona.id || s.student_id === currentPersona.id || (s.attendees || []).some(a => a.student_id === currentPersona.id));
+          return isParticipant && t.canJoin && !['CANCELLED', 'DECLINED'].includes((s.status || '').toUpperCase());
+        }) ||
+        // Priority 2: Any public cohort that can be joined right now
+        sessions.find(s => {
+          const t = this.getScheduledTiming(s);
+          return t.canJoin && s.session_type === 'GROUP_COHORT' && !['CANCELLED', 'DECLINED'].includes((s.status || '').toUpperCase());
+        });
+
+        if (session) {
+          this.activeLiveRoomSessionId = session.id;
+        } else {
+          // If no active live session is running, inform user politely and return to sessions list
+          this.showToast('No active live session is running right now. View scheduled sessions below.', 'circle-info');
+          this.switchView('view-sessions');
+          return;
+        }
       }
 
       if (!session) return;
 
       const timing = this.getScheduledTiming(session);
-      const isCompleted = ['COMPLETED', 'ENDED'].includes((session.status || '').toUpperCase()) || timing.isPastEnd;
+      const isCompleted = (['COMPLETED', 'ENDED'].includes((session.status || '').toUpperCase()) && session.attendance_finalized_at) || timing.isPastEnd;
       if (isCompleted) {
-        alert('This masterclass has already concluded or reached its scheduled duration.');
+        alert('This session has already concluded or reached its scheduled duration.');
         this.switchView('view-sessions');
         return;
       }
 
-      const canJoinRoom = timing.isStarted || timing.isStartingNow || (timing.startsInMs <= 5 * 60 * 1000);
-      if (!canJoinRoom) {
-        alert(`This session is scheduled to start at ${session.time || 'the scheduled time'} (${session.date || ''}). The classroom activates automatically when the scheduled time arrives.`);
+      if (!timing.canJoin) {
+        alert(`This session is scheduled to start at ${session.time || 'the scheduled time'} (${session.date || ''}). The classroom activates automatically 5 minutes before the scheduled start time.`);
         this.switchView('view-sessions');
         return;
       }

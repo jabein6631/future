@@ -397,8 +397,8 @@ const sessionController = {
 
       // Check scheduled session timing (User and mentor cannot enter before scheduled start time)
       const timing = supabaseService.getScheduledStartAndEndTimes(session);
-      const isEnded = timing.isPastEnd || ['COMPLETED', 'ENDED', 'CANCELLED', 'DECLINED'].includes((session.status || '').toUpperCase());
-      if (isEnded) {
+      const isExplicitlyEnded = ['CANCELLED', 'DECLINED'].includes((session.status || '').toUpperCase()) || session.attendance_finalized_at != null;
+      if (timing.isPastEnd || isExplicitlyEnded) {
         return res.status(400).json({
           success: false,
           error: 'This session has completed or reached its scheduled duration.',
@@ -406,11 +406,10 @@ const sessionController = {
         });
       }
 
-      const canJoinSession = timing.isStarted || timing.isStartingNow || (timing.startsInMs <= 5 * 60 * 1000);
-      if (!canJoinSession) {
+      if (!timing.canJoin) {
         return res.status(400).json({
           success: false,
-          error: `This session is scheduled to start at ${session.time || 'the scheduled time'} (${session.date || ''}). The classroom activates automatically when the scheduled time arrives.`,
+          error: `This session is scheduled to start at ${session.time || 'the scheduled time'} (${session.date || ''}). The classroom activates automatically 5 minutes before the scheduled start time.`,
           scheduledStartTime: timing.startTime,
           startsInMs: timing.startsInMs,
           isUpcoming: true
@@ -923,16 +922,17 @@ const sessionController = {
         return res.json({ success: true, isEnded: true, status: 'ENDED', remainingSeconds: 0 });
       }
 
-      const durationHours = Number(session.hours || 1);
-      const durationMs = durationHours * 60 * 60 * 1000;
-      let scheduledEndMs = Date.now() + durationMs;
+      const timing = supabaseService.getScheduledStartAndEndTimes(session);
+      let scheduledEndMs = timing.endTime;
 
       if (session.meeting_started_at) {
         const startStr = String(session.meeting_started_at);
         const normalizedStart = (startStr.endsWith('Z') || startStr.includes('+')) ? startStr : startStr.replace(' ', 'T') + 'Z';
         const startTime = new Date(normalizedStart).getTime();
         if (!isNaN(startTime)) {
-          scheduledEndMs = startTime + durationMs;
+          const durationHours = Number(session.hours || 1);
+          const durationMs = durationHours * 60 * 60 * 1000;
+          scheduledEndMs = Math.max(scheduledEndMs, startTime + durationMs);
         }
       }
 

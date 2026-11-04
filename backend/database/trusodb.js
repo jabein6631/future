@@ -120,7 +120,7 @@ const dbProvider = {
         console.warn('⚠️ Supabase getUsers notice, falling back to Turso DB:', e.message);
       }
     }
-    
+
     if (users.length === 0) {
       users = await db.allAsync(`SELECT * FROM users WHERE is_admin = 0`);
       const userIds = users.map(u => u.id);
@@ -497,7 +497,7 @@ const dbProvider = {
     let normalized = (skillName || 'Python Programming & DSA').trim();
     try {
       normalized = decodeURIComponent(normalized).trim();
-    } catch (e) {}
+    } catch (e) { }
     const count = Math.max(10, Math.min(50, Number(questionCount) || 20));
     const questions = await generateDynamicAssessment({
       skillName: normalized,
@@ -926,7 +926,10 @@ const dbProvider = {
     platform,
     meetingPlatform,
     meetingLink,
-    status
+    status,
+    scheduled_start_ms,
+    scheduled_end_ms,
+    timezone
   }) {
     await ensureVerifiedTutorsAndCertificates();
     const finalHours = Number(durationHours || duration || 1);
@@ -984,14 +987,22 @@ const dbProvider = {
     const finalStatus = status === 'DRAFT' ? 'DRAFT' : 'Confirmed';
     const finalMeetingLink = meetingLink || (finalPlatform === 'Google Meet' ? `https://meet.google.com/skillswap-${Date.now().toString(36)}` : `https://meet.skillswap.edu/live-cohort-${Date.now()}`);
 
+    const scheduledStartMs = (scheduled_start_ms && Number(scheduled_start_ms) > 0)
+      ? Number(scheduled_start_ms)
+      : this.computeScheduledStartMs(finalDate, finalTime, timezone || 'Asia/Kolkata');
+    const scheduledEndMs = (scheduled_end_ms && Number(scheduled_end_ms) > 0)
+      ? Number(scheduled_end_ms)
+      : (scheduledStartMs + Math.round(finalHours * 3600000));
+    const sessionTimezone = timezone || 'Asia/Kolkata';
+
     const sessionId = 'cohort_' + Date.now();
     await db.runAsync(
       `INSERT INTO sessions (
         id, teacher_id, student_id, skill, hours, rate, credits, session_type, max_capacity,
         rate_per_student, enrolled_count, total_earned_credits, date, time, status, topic,
         category, description, learning_details, tags, minimum_academic_level, prerequisites,
-        platform, meeting_platform, session_series_type, code_workspace
-      ) VALUES (?, ?, ?, ?, ?, ?, 0.0, 'GROUP_COHORT', ?, ?, 0, 0.0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        platform, meeting_platform, session_series_type, code_workspace, scheduled_start_ms, scheduled_end_ms, timezone
+      ) VALUES (?, ?, ?, ?, ?, ?, 0.0, 'GROUP_COHORT', ?, ?, 0, 0.0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         sessionId,
         tutorId,
@@ -1014,7 +1025,10 @@ const dbProvider = {
         finalPlatform,
         finalPlatform,
         finalSeriesType,
-        finalMeetingLink
+        finalMeetingLink,
+        scheduledStartMs,
+        scheduledEndMs,
+        sessionTimezone
       ]
     );
 
@@ -1654,12 +1668,17 @@ const dbProvider = {
     // 5. Booking Validation - Available Credits Check
     // User A balance remains untouched until both join and 50% duration is reached
     const sessionId = 'sess_' + Date.now();
+    const scheduledStartMs = this.computeScheduledStartMs(finalDate, finalTime, 'Asia/Kolkata');
+    const scheduledEndMs = scheduledStartMs + Math.round(hours * 3600000);
+    const sessionTimezone = 'Asia/Kolkata';
+
     try {
       await db.runAsync(
         `INSERT INTO sessions (
           id, teacher_id, student_id, skill, hours, rate, credits, date, time, status, topic,
-          description, platform, meeting_platform, session_type, code_workspace, additional_notes, payment_status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, 'PENDING')`,
+          description, platform, meeting_platform, session_type, code_workspace, additional_notes, payment_status,
+          scheduled_start_ms, scheduled_end_ms, timezone
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?)`,
         [
           sessionId,
           tutorId,
@@ -1676,7 +1695,10 @@ const dbProvider = {
           finalPlatform,
           finalType,
           finalMeetingLink,
-          finalNotes
+          finalNotes,
+          scheduledStartMs,
+          scheduledEndMs,
+          sessionTimezone
         ]
       );
     } catch (dbErr) {
@@ -1703,7 +1725,7 @@ const dbProvider = {
          VALUES (?, ?, 'Session Request Sent', ?, 'Just now', 1, 'session')`,
         [notifLearnerId, learnerId, `Your session request has been sent to ${tutor.name}. You will be notified when the mentor accepts or declines.`]
       );
-    } catch (e) {}
+    } catch (e) { }
 
     const updatedLearner = await db.getAsync(`SELECT credits, escrow_locked FROM users WHERE id = ?`, [learnerId]);
 
@@ -1912,7 +1934,7 @@ const dbProvider = {
             `50% of your ${session.skill} session with ${student.name} reached! +${transferCredits} Credit earned and added to your wallet.`
           ]
         );
-      } catch (e) {}
+      } catch (e) { }
 
       const updatedStudent = await db.getAsync(`SELECT id, credits, escrow_locked FROM users WHERE id = ?`, [session.student_id]);
       const updatedTeacher = await db.getAsync(`SELECT id, credits FROM users WHERE id = ?`, [session.teacher_id]);
@@ -2063,7 +2085,7 @@ const dbProvider = {
           `${tutor?.name || 'Mentor'} accepted your session request for ${session.skill} on ${session.date} at ${session.time}.`
         ]
       );
-    } catch (e) {}
+    } catch (e) { }
 
     const updated = await db.getAsync(`SELECT * FROM sessions WHERE id = ?`, [sessionId]);
     return {
@@ -2160,7 +2182,7 @@ const dbProvider = {
           `${tutor?.name || 'Mentor'} was unable to accept your swap session request for ${session.skill}. Your credits have been returned to your wallet.`
         ]
       );
-    } catch (e) {}
+    } catch (e) { }
 
     const updated = await db.getAsync(`SELECT * FROM sessions WHERE id = ?`, [sessionId]);
     return {
@@ -2333,7 +2355,7 @@ const dbProvider = {
             `Your session with ${tutor?.name || 'Mentor'} on ${session.skill} has concluded.`
           ]
         );
-      } catch (e) {}
+      } catch (e) { }
 
       const updatedTutor = await db.getAsync(`SELECT credits FROM users WHERE id = ?`, [session.teacher_id]);
       return {
@@ -2449,10 +2471,10 @@ const dbProvider = {
       }
       try {
         await db.runAsync(`UPDATE masterclass_registrations SET status = 'CANCELLED' WHERE masterclass_id = ?`, [sessionId]);
-      } catch (e) {}
+      } catch (e) { }
       try {
         await db.runAsync(`UPDATE session_attendees SET status = 'CANCELLED' WHERE session_id = ?`, [sessionId]);
-      } catch (e) {}
+      } catch (e) { }
 
       // Notify registered attendees
       try {
@@ -2477,7 +2499,7 @@ const dbProvider = {
             );
           }
         }
-      } catch (e) {}
+      } catch (e) { }
 
       return { success: true, sessionId, status: 'CANCELLED', cancelled_by: cancellingUserId };
     }
@@ -2537,7 +2559,7 @@ const dbProvider = {
             sessionId
           ]
         );
-      } catch (e) {}
+      } catch (e) { }
     }
 
     // Send notification to the other party
@@ -2560,7 +2582,7 @@ const dbProvider = {
          VALUES (?, ?, ?, ?, 'Just now', 1, 'session')`,
         [notifId, targetUserId, notifTitle, notifMsg]
       );
-    } catch (e) {}
+    } catch (e) { }
 
     return {
       success: true,
@@ -2638,10 +2660,13 @@ const dbProvider = {
 
     const oldDate = session.date;
     const oldTime = session.time;
+    const effHours = Number(session.hours || 1);
+    const newStartMs = this.computeScheduledStartMs(newDate, newTime, session.timezone || 'Asia/Kolkata');
+    const newEndMs = newStartMs + Math.round(effHours * 3600000);
 
     await db.runAsync(
-      `UPDATE sessions SET date = ?, time = ? WHERE id = ?`,
-      [newDate, newTime, sessionId]
+      `UPDATE sessions SET date = ?, time = ?, scheduled_start_ms = ?, scheduled_end_ms = ? WHERE id = ?`,
+      [newDate, newTime, newStartMs, newEndMs, sessionId]
     );
 
     // Notify registered participants using the notification infrastructure
@@ -2745,6 +2770,16 @@ const dbProvider = {
       values.push(updates.notes);
     }
 
+    if (updates.date !== undefined || updates.time !== undefined || updates.hours !== undefined) {
+      const effDate = updates.date || session.date;
+      const effTime = updates.time || session.time;
+      const effHours = Number(updates.hours || session.hours || 1);
+      const newStartMs = this.computeScheduledStartMs(effDate, effTime, session.timezone || 'Asia/Kolkata');
+      const newEndMs = newStartMs + Math.round(effHours * 3600000);
+      fields.push(`scheduled_start_ms = ?`, `scheduled_end_ms = ?`);
+      values.push(newStartMs, newEndMs);
+    }
+
     if (fields.length > 0) {
       values.push(sessionId);
       await db.runAsync(`UPDATE sessions SET ${fields.join(', ')} WHERE id = ?`, values);
@@ -2753,7 +2788,7 @@ const dbProvider = {
     if (updates.teacher_name && session.teacher_id) {
       try {
         await db.runAsync(`UPDATE users SET name = ? WHERE id = ?`, [updates.teacher_name, session.teacher_id]);
-      } catch (e) {}
+      } catch (e) { }
     }
 
     const updated = await db.getAsync(`SELECT * FROM sessions WHERE id = ?`, [sessionId]);
@@ -2844,7 +2879,7 @@ const dbProvider = {
         (s.status && s.status.toUpperCase() === 'DECLINED')
       )
     );
-    
+
     // Pending or mentor-declined requests for student
     const studentPending = enriched.filter(s =>
       isUserMatch(s.student_id) &&
@@ -3293,7 +3328,7 @@ const dbProvider = {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         ['verif_' + Date.now() + '_' + Math.floor(Math.random() * 1000), certId, finalMethod || 'AUTOMATED_ANALYSIS', finalStatus, userId, finalCredentialId, skillName, finalStatus, verifResult.confidence || 90, JSON.stringify(verifResult)]
       );
-    } catch (e) {}
+    } catch (e) { }
 
     // Handle VERIFIED outcome vs NON-VERIFIED outcomes
     if (finalStatus === 'VERIFIED') {
@@ -3423,7 +3458,7 @@ const dbProvider = {
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
           ['rej_' + Date.now() + '_' + Math.floor(Math.random() * 1000), userId, finalCredentialId, skillName, finalAuthority, title, finalScoreOrGrade, fileName, finalReason, JSON.stringify(verifResult)]
         );
-      } catch (e) {}
+      } catch (e) { }
 
       const updatedUser = await this.getUserById(userId);
       return {
@@ -3617,8 +3652,59 @@ const dbProvider = {
     }
   },
 
+  computeScheduledStartMs(dateStr, timeStr, timezone = 'Asia/Kolkata') {
+    if (!dateStr) return Date.now();
+    let year = 2026, month = 11, day = 4;
+    const cleanDate = String(dateStr).trim();
+    const dmyMatch = cleanDate.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
+    if (dmyMatch) {
+      day = parseInt(dmyMatch[1], 10);
+      month = parseInt(dmyMatch[2], 10);
+      year = parseInt(dmyMatch[3], 10);
+    } else {
+      const ymdMatch = cleanDate.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+      if (ymdMatch) {
+        year = parseInt(ymdMatch[1], 10);
+        month = parseInt(ymdMatch[2], 10);
+        day = parseInt(ymdMatch[3], 10);
+      } else {
+        const parsed = new Date(cleanDate);
+        if (!isNaN(parsed.getTime())) {
+          year = parsed.getFullYear();
+          month = parsed.getMonth() + 1;
+          day = parsed.getDate();
+        }
+      }
+    }
+
+    let hours = 9, minutes = 0;
+    const tStr = String(timeStr || '09:00 AM').trim();
+    const tMatch = tStr.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i);
+    if (tMatch) {
+      hours = parseInt(tMatch[1], 10);
+      minutes = parseInt(tMatch[2], 10);
+      const ampm = tMatch[4] ? tMatch[4].toUpperCase() : null;
+      if (ampm === 'PM' && hours < 12) hours += 12;
+      if (ampm === 'AM' && hours === 12) hours = 0;
+    } else {
+      const simpleMatch = tStr.match(/^(\d{1,2})\s*(AM|PM)?$/i);
+      if (simpleMatch) {
+        hours = parseInt(simpleMatch[1], 10);
+        const ampm = simpleMatch[2] ? simpleMatch[2].toUpperCase() : null;
+        if (ampm === 'PM' && hours < 12) hours += 12;
+        if (ampm === 'AM' && hours === 12) hours = 0;
+      }
+    }
+
+    let tzOffsetMs = 5.5 * 60 * 60 * 1000;
+    if (timezone === 'UTC' || timezone === 'GMT') {
+      tzOffsetMs = 0;
+    }
+    return Date.UTC(year, month - 1, day, hours, minutes, 0, 0) - tzOffsetMs;
+  },
+
   getScheduledStartAndEndTimes(session) {
-    if (!session) return { startTime: 0, endTime: 0, isStarted: false, isPastEnd: false, remainingMs: 0, startsInMs: 0 };
+    if (!session) return { startTime: 0, endTime: 0, isStarted: false, isPastEnd: false, isStartingNow: false, canJoin: false, statusText: 'Session completed', remainingMs: 0, startsInMs: 0 };
 
     let durationHours = 1.0;
     if (session.hours != null) {
@@ -3639,77 +3725,30 @@ const dbProvider = {
       }
     }
     if (isNaN(durationHours) || durationHours <= 0) durationHours = 1.0;
+    const durationMs = Math.round(durationHours * 3600000);
 
-    // Direct millisecond timestamps if stored
+    let startMs = 0;
     if (session.scheduled_start_ms && Number(session.scheduled_start_ms) > 0) {
-      const startMs = Number(session.scheduled_start_ms);
-      const endMs = session.scheduled_end_ms ? Number(session.scheduled_end_ms) : (startMs + Math.round(durationHours * 3600000));
-      const nowMs = Date.now();
-      return {
-        startTime: startMs,
-        endTime: endMs,
-        isStarted: nowMs >= startMs,
-        isPastEnd: nowMs >= endMs,
-        remainingMs: Math.max(0, endMs - nowMs),
-        startsInMs: Math.max(0, startMs - nowMs)
-      };
-    }
-
-    const dateStr = session.date || session.session_date || new Date().toISOString().split('T')[0];
-    const timeStr = session.time || session.start_time || '08:00 PM';
-
-    let year = 2026, month = 11, day = 2;
-    const cleanDateStr = String(dateStr).trim();
-
-    // Check if DD-MM-YYYY or DD/MM/YYYY (common in India, UK, etc.)
-    const dmyMatch = cleanDateStr.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
-    if (dmyMatch) {
-      day = parseInt(dmyMatch[1], 10);
-      month = parseInt(dmyMatch[2], 10);
-      year = parseInt(dmyMatch[3], 10);
+      startMs = Number(session.scheduled_start_ms);
+    } else if (session.timing && session.timing.startTime && Number(session.timing.startTime) > 0) {
+      startMs = Number(session.timing.startTime);
     } else {
-      // Check if YYYY-MM-DD
-      const ymdMatch = cleanDateStr.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
-      if (ymdMatch) {
-        year = parseInt(ymdMatch[1], 10);
-        month = parseInt(ymdMatch[2], 10);
-        day = parseInt(ymdMatch[3], 10);
-      } else {
-        const dObj = new Date(cleanDateStr);
-        if (!isNaN(dObj.getTime())) {
-          year = dObj.getFullYear();
-          month = dObj.getMonth() + 1;
-          day = dObj.getDate();
-        }
-      }
+      const dateStr = session.date || session.session_date;
+      const timeStr = session.time || session.start_time;
+      startMs = this.computeScheduledStartMs(dateStr, timeStr, session.timezone || 'Asia/Kolkata');
     }
 
-    let hours = 20, minutes = 0;
-    const tMatch = String(timeStr).trim().match(/^(\d{1,2}):?(\d{2})?\s*(AM|PM)?$/i);
-    if (tMatch) {
-      hours = parseInt(tMatch[1], 10);
-      minutes = tMatch[2] ? parseInt(tMatch[2], 10) : 0;
-      const ampm = tMatch[3] ? tMatch[3].toUpperCase() : null;
-      if (ampm === 'PM' && hours < 12) hours += 12;
-      if (ampm === 'AM' && hours === 12) hours = 0;
-    }
+    const endMs = (session.scheduled_end_ms && Number(session.scheduled_end_ms) > 0)
+      ? Number(session.scheduled_end_ms)
+      : (startMs + durationMs);
 
-    // Always anchor strictly to Indian Standard Time (IST / Asia/Kolkata, UTC+05:30)
-    // IST offset is uniform throughout the year: +5.5 hours = +19,800,000 ms (no DST)
-    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-    let startMs = Date.UTC(year, month - 1, day, hours, minutes, 0, 0) - IST_OFFSET_MS;
-    if (isNaN(startMs)) {
-      startMs = session.scheduled_start_ms ? Number(session.scheduled_start_ms) : (session.created_at ? new Date(session.created_at).getTime() : Date.now());
-    }
-
-    const endMs = startMs + Math.round(durationHours * 3600000);
     const nowMs = Date.now();
     const timeRemaining = startMs - nowMs;
     const isPastEnd = nowMs >= endMs;
     const isStarted = nowMs >= startMs;
     const START_WINDOW_MS = 5 * 60 * 1000; // 5 min early joining window
     const isStartingNow = !isStarted && timeRemaining <= START_WINDOW_MS && timeRemaining > 0;
-    const canJoin = isStarted || isStartingNow;
+    const canJoin = (isStarted || isStartingNow) && !isPastEnd;
 
     let statusText = 'Upcoming';
     if (isPastEnd) {
@@ -3719,7 +3758,7 @@ const dbProvider = {
     } else if (isStartingNow) {
       statusText = 'Starting now';
     } else {
-      const totalSec = Math.floor(timeRemaining / 1000);
+      const totalSec = Math.floor(Math.max(0, timeRemaining) / 1000);
       const hrs = Math.floor(totalSec / 3600);
       const mins = Math.floor((totalSec % 3600) / 60);
       statusText = hrs > 0 ? `Starts in ${hrs}h ${mins}m` : `Starts in ${mins}m`;
@@ -3728,6 +3767,7 @@ const dbProvider = {
     return {
       startTime: startMs,
       endTime: endMs,
+      durationHours,
       isStarted,
       isPastEnd,
       isStartingNow,
@@ -3760,7 +3800,7 @@ const dbProvider = {
       this._lastLiveExpiredCheck = now;
 
       const candidateSessions = await db.allAsync(
-        `SELECT * FROM sessions WHERE status NOT IN ('ENDED', 'Completed', 'CANCELLED', 'DECLINED')`
+        `SELECT * FROM sessions WHERE UPPER(status) NOT IN ('CANCELLED', 'DECLINED') AND attendance_finalized_at IS NULL`
       );
       const activatedSessionIds = [];
       const expiredSessionIds = [];
@@ -3770,11 +3810,13 @@ const dbProvider = {
         const currStatus = (s.status || '').toUpperCase();
 
         if (timing.isPastEnd) {
-          await db.runAsync(
-            `UPDATE sessions SET status = 'Completed', meeting_ended_at = COALESCE(meeting_ended_at, CURRENT_TIMESTAMP) WHERE id = ?`,
-            [s.id]
-          );
-          expiredSessionIds.push(s.id);
+          if (currStatus !== 'COMPLETED' && currStatus !== 'ENDED') {
+            await db.runAsync(
+              `UPDATE sessions SET status = 'Completed', meeting_ended_at = COALESCE(meeting_ended_at, CURRENT_TIMESTAMP) WHERE id = ?`,
+              [s.id]
+            );
+            expiredSessionIds.push(s.id);
+          }
         } else if (timing.isStarted) {
           if (currStatus !== 'LIVE') {
             await db.runAsync(
@@ -3826,7 +3868,7 @@ const dbProvider = {
                     );
                   }
                 }
-              } catch (e) {}
+              } catch (e) { }
             }
           }
         }
