@@ -1215,14 +1215,25 @@ class SkillSwapStore {
   }
 
   async getSessionDetails(sessionId) {
-    const res = await fetch(`${this.apiBase}/sessions/${sessionId}`, {
-      headers: this.getAuthHeaders()
-    });
-    const data = await res.json();
-    if (!res.ok || !data.success) {
-      throw new Error(data.error || 'Failed to fetch session details');
+    if (!sessionId) throw new Error('Session ID is required');
+
+    // 1. Check in-memory store sessions first for instantaneous response and offline resilience
+    const local = (this.sessions || []).find(s => s && (s.id === sessionId || String(s.id) === String(sessionId)));
+
+    try {
+      const res = await fetch(`${this.apiBase}/sessions/${encodeURIComponent(sessionId)}`, {
+        headers: this.getAuthHeaders()
+      });
+      const data = await this.safeJson(res);
+      if (data && data.success && data.session) {
+        return data.session;
+      }
+      if (local) return local;
+      throw new Error(data?.error || data?.message || 'Failed to fetch session details');
+    } catch (err) {
+      if (local) return local;
+      throw err;
     }
-    return data.session;
   }
 
   async fetchWallet() {

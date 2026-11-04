@@ -16,7 +16,8 @@ router.get('/mentors', optionalAuth, async (req, res, next) => {
   try {
     const search = req.query.search || '';
     const tier = req.query.tier || '';
-    const excludeUserId = req.user?.id || req.headers['x-user-id'] || req.query.excludeUserId;
+    // Only exclude self if explicitly requested via query param or excludeSelf flag
+    const excludeUserId = req.query.excludeUserId || (req.query.excludeSelf === 'true' ? (req.headers['x-user-id'] || req.user?.id) : null);
     const mentors = await trusodbService.getBookingMentors({ search, tier, excludeUserId });
     res.json({ success: true, mentors, count: mentors.length });
   } catch (err) {

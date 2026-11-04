@@ -5,6 +5,7 @@ const { authenticateToken, optionalAuth } = require('../middleware/auth');
 
 // Public / Optionally Authenticated routes
 router.get('/', optionalAuth, sessionController.getSessions);
+router.get('/:id', optionalAuth, sessionController.getSessionById);
 
 // All other session routes strictly require authentication
 router.use(authenticateToken);
@@ -37,7 +38,6 @@ router.post('/:id/attendance', sessionController.recordAttendance);
 router.post('/:id/leave', sessionController.recordLeave);
 
 // Session Details & Actions Routes
-router.get('/:id', sessionController.getSessionById);
 router.post('/:id/accept', sessionController.acceptSession);
 router.post('/:id/decline', sessionController.declineSession);
 router.post('/:id/finalize', sessionController.finalizeAttendance);

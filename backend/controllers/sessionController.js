@@ -406,7 +406,8 @@ const sessionController = {
         });
       }
 
-      if (!timing.isStarted) {
+      const canJoinSession = timing.isStarted || timing.isStartingNow || (timing.startsInMs <= 5 * 60 * 1000);
+      if (!canJoinSession) {
         return res.status(400).json({
           success: false,
           error: `This session is scheduled to start at ${session.time || 'the scheduled time'} (${session.date || ''}). The classroom activates automatically when the scheduled time arrives.`,

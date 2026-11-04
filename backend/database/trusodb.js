@@ -126,15 +126,17 @@ const dbProvider = {
       const userIds = users.map(u => u.id);
       if (userIds.length > 0) {
         const placeholders = userIds.map(() => '?').join(',');
-        const [allOffered, allWanted, allCerts] = await Promise.all([
+        const [allOffered, allWanted, allCerts, allAttempts] = await Promise.all([
           db.allAsync(`SELECT * FROM skills_offered WHERE user_id IN (${placeholders})`, userIds),
           db.allAsync(`SELECT * FROM skills_wanted WHERE user_id IN (${placeholders})`, userIds),
-          db.allAsync(`SELECT * FROM certificates WHERE user_id IN (${placeholders})`, userIds)
+          db.allAsync(`SELECT * FROM certificates WHERE user_id IN (${placeholders})`, userIds),
+          db.allAsync(`SELECT * FROM quiz_attempts WHERE user_id IN (${placeholders})`, userIds)
         ]);
 
         const offeredMap = {};
         const wantedMap = {};
         const certsMap = {};
+        const attemptsMap = {};
         for (const o of allOffered) {
           (offeredMap[o.user_id] = offeredMap[o.user_id] || []).push(o);
         }
@@ -144,6 +146,9 @@ const dbProvider = {
         for (const c of allCerts) {
           (certsMap[c.user_id] = certsMap[c.user_id] || []).push(c);
         }
+        for (const a of (allAttempts || [])) {
+          (attemptsMap[a.user_id] = attemptsMap[a.user_id] || []).push(a);
+        }
 
         for (const u of users) {
           delete u.password_hash;
@@ -152,9 +157,52 @@ const dbProvider = {
           } catch (e) {
             u.badges = [];
           }
-          u.skillsOffered = offeredMap[u.id] || [];
+          const userCerts = certsMap[u.id] || [];
+          const userAttempts = attemptsMap[u.id] || [];
+          const userOffered = (offeredMap[u.id] || []).slice();
+
+          const maxScore = userAttempts.reduce((max, a) => Math.max(max, Number(a.score_percent) || 0), 0);
+          const hasVerifiedCert = userCerts.some(c => c.is_verified === 1 || c.certificate_status === 'VERIFIED' || c.tutor_eligible === 1);
+          const tierInfo = determineTutorTier(maxScore, hasVerifiedCert);
+
+          u.tier = tierInfo.tier;
+          u.badge = tierInfo.badge;
+          u.rate = tierInfo.rate;
+          u.rateDisplay = `${tierInfo.rate.toFixed(1)} Cr/hr`;
+
+          // If skills_offered lacks verified certificate subjects, inject them dynamically
+          for (const c of userCerts) {
+            if (c.is_verified === 1 || c.certificate_status === 'VERIFIED' || c.tutor_eligible === 1) {
+              const certSkillName = (c.skill_name || c.title || '').trim();
+              if (certSkillName && !userOffered.some(s => s.name?.toLowerCase() === certSkillName.toLowerCase())) {
+                userOffered.push({
+                  id: 'sk_cert_' + c.id,
+                  user_id: u.id,
+                  name: certSkillName,
+                  level: tierInfo.tier.includes('Elite') ? 'Expert' : 'Advanced',
+                  category: 'Management & Business',
+                  rate: tierInfo.rate,
+                  tier: tierInfo.tier,
+                  description: c.issuer || 'NPTEL & Academic Verified Credential',
+                  is_verified: 1,
+                  quiz_score: maxScore,
+                  cert_count: 1
+                });
+              }
+            }
+          }
+
+          // Ensure skills offered have authoritative tier & rate
+          for (const s of userOffered) {
+            if (tierInfo.rate > (s.rate || 1.0)) {
+              s.rate = tierInfo.rate;
+              s.tier = tierInfo.tier;
+            }
+          }
+
+          u.skillsOffered = userOffered;
           u.skillsWanted = wantedMap[u.id] || [];
-          u.certificates = certsMap[u.id] || [];
+          u.certificates = userCerts;
         }
       }
     }
@@ -229,12 +277,50 @@ const dbProvider = {
     } catch (e) {
       user.badges = [];
     }
-    user.skillsOffered = await db.allAsync(`SELECT * FROM skills_offered WHERE user_id = ?`, [user.id]);
-    user.skillsWanted = await db.allAsync(`SELECT * FROM skills_wanted WHERE user_id = ?`, [user.id]);
-    user.certificates = await db.allAsync(`SELECT * FROM certificates WHERE user_id = ?`, [user.id]);
-    user.reviews = await db.allAsync(`SELECT * FROM reviews WHERE target_user_id = ? ORDER BY id DESC`, [user.id]);
-    user.transactions = await db.allAsync(`SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC, id DESC`, [user.id]);
-    user.quizAttempts = await db.allAsync(`SELECT * FROM quiz_attempts WHERE user_id = ? ORDER BY attempted_at DESC, id DESC`, [user.id]);
+    user.skillsOffered = await db.allAsync(`SELECT * FROM skills_offered WHERE user_id = ?`, [user.id]) || [];
+    user.skillsWanted = await db.allAsync(`SELECT * FROM skills_wanted WHERE user_id = ?`, [user.id]) || [];
+    user.certificates = await db.allAsync(`SELECT * FROM certificates WHERE user_id = ?`, [user.id]) || [];
+    user.reviews = await db.allAsync(`SELECT * FROM reviews WHERE target_user_id = ? ORDER BY id DESC`, [user.id]) || [];
+    user.transactions = await db.allAsync(`SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC, id DESC`, [user.id]) || [];
+    user.quizAttempts = await db.allAsync(`SELECT * FROM quiz_attempts WHERE user_id = ? ORDER BY attempted_at DESC, id DESC`, [user.id]) || [];
+
+    const maxScore = (user.quizAttempts || []).reduce((max, a) => Math.max(max, Number(a.score_percent) || 0), 0);
+    const hasVerifiedCert = (user.certificates || []).some(c => c.is_verified === 1 || c.certificate_status === 'VERIFIED' || c.tutor_eligible === 1);
+    const tierInfo = determineTutorTier(maxScore, hasVerifiedCert);
+
+    user.tier = tierInfo.tier;
+    user.badge = tierInfo.badge;
+    user.rate = tierInfo.rate;
+    user.rateDisplay = `${tierInfo.rate.toFixed(1)} Cr/hr`;
+
+    // Ensure certified subjects are in skillsOffered
+    for (const c of user.certificates) {
+      if (c.is_verified === 1 || c.certificate_status === 'VERIFIED' || c.tutor_eligible === 1) {
+        const certSkillName = (c.skill_name || c.title || '').trim();
+        if (certSkillName && !user.skillsOffered.some(s => s.name?.toLowerCase() === certSkillName.toLowerCase())) {
+          user.skillsOffered.push({
+            id: 'sk_cert_' + c.id,
+            user_id: user.id,
+            name: certSkillName,
+            level: tierInfo.tier.includes('Elite') ? 'Expert' : 'Advanced',
+            category: 'Management & Business',
+            rate: tierInfo.rate,
+            tier: tierInfo.tier,
+            description: c.issuer || 'NPTEL & Academic Verified Credential',
+            is_verified: 1,
+            quiz_score: maxScore,
+            cert_count: 1
+          });
+        }
+      }
+    }
+
+    for (const s of user.skillsOffered) {
+      if (tierInfo.rate > (s.rate || 1.0)) {
+        s.rate = tierInfo.rate;
+        s.tier = tierInfo.tier;
+      }
+    }
     for (const r of user.reviews) {
       try {
         r.tags = typeof r.tags_json === 'string' ? JSON.parse(r.tags_json || '[]') : (r.tags_json || []);
@@ -1355,39 +1441,32 @@ const dbProvider = {
       return (Number(b.rating) || 0) - (Number(a.rating) || 0);
     });
 
+    let result = mentors;
+
     if (filter.tier && filter.tier !== 'all') {
       const t = filter.tier.toLowerCase();
-      return mentors.filter(m => m.tier.toLowerCase().includes(t));
+      result = result.filter(m => m.tier.toLowerCase().includes(t));
     }
 
     if (filter.search) {
       const q = filter.search.toLowerCase().trim();
-      return mentors.filter(m =>
+      result = result.filter(m =>
         m.name.toLowerCase().includes(q) ||
         (m.department && m.department.toLowerCase().includes(q)) ||
         (m.major && m.major.toLowerCase().includes(q)) ||
         (m.college && m.college.toLowerCase().includes(q)) ||
         m.tier.toLowerCase().includes(q) ||
-        m.skills.some(s => s.toLowerCase().includes(q))
+        m.skills.some(s => (typeof s === 'string' ? s : s.name || '').toLowerCase().includes(q))
       );
     }
 
-    return mentors;
+    return result;
   },
 
   async getBookingSubjects() {
-    try {
-      const subjects = await db.allAsync(`SELECT * FROM subjects ORDER BY id ASC`);
-      if (subjects && subjects.length > 0) {
-        return subjects.map(s => ({
-          ...s,
-          topics: typeof s.topics_json === 'string' ? JSON.parse(s.topics_json) : (s.topics || [])
-        }));
-      }
-    } catch (err) {
-      console.error('Error fetching subjects from DB, using defaults:', err);
-    }
-    return [
+    const defaultSubjects = [
+      { id: 'subj-10', name: 'Principles of Management', category: 'Management', icon: '📊', topics: ['Organizational Behavior', 'Strategic Leadership', 'Project Planning & Agile', 'Operations & Logistics', 'NPTEL & Exam Preparation'] },
+      { id: 'subj-11', name: 'Full Stack Web Development', category: 'Development', icon: '💻', topics: ['Frontend Architecture', 'Node & Express Backends', 'REST & Database Design', 'Deployment & CI/CD'] },
       { id: 'subj-1', name: 'UI/UX Design & Figma', category: 'Design', icon: '🎨', topics: ['Figma Auto-layout & Tokens', 'User Research & Persona', 'Wireframing & Prototyping', 'Design Systems'] },
       { id: 'subj-2', name: 'Python Core & OOP', category: 'Development', icon: '🐍', topics: ['Data Structures & Lists', 'Object Oriented Programming', 'File I/O & Exception Handling', 'Asyncio & Concurrency'] },
       { id: 'subj-3', name: 'React.js Frontend', category: 'Development', icon: '⚛️', topics: ['Hooks (useState, useEffect)', 'State Management (Redux/Zustand)', 'Component Architecture', 'Performance Optimization'] },
@@ -1398,6 +1477,26 @@ const dbProvider = {
       { id: 'subj-8', name: 'Tailwind & Design Systems', category: 'Design', icon: '💅', topics: ['Utility-First CSS', 'Responsive Breakpoints', 'Custom Themes & Config', 'Component Extraction'] },
       { id: 'subj-9', name: 'Node.js & Express APIs', category: 'Development', icon: '🚀', topics: ['REST API Architecture', 'JWT Authentication', 'Middleware & Error Handling', 'WebSockets & Realtime'] }
     ];
+
+    try {
+      const subjects = await db.allAsync(`SELECT * FROM subjects ORDER BY id ASC`);
+      if (subjects && subjects.length > 0) {
+        const dbList = subjects.map(s => ({
+          ...s,
+          topics: typeof s.topics_json === 'string' ? JSON.parse(s.topics_json) : (s.topics || [])
+        }));
+        // Merge in any default subjects missing from DB
+        for (const def of defaultSubjects) {
+          if (!dbList.some(s => s.name?.toLowerCase() === def.name.toLowerCase())) {
+            dbList.push(def);
+          }
+        }
+        return dbList;
+      }
+    } catch (err) {
+      console.error('Error fetching subjects from DB, using defaults:', err);
+    }
+    return defaultSubjects;
   },
 
   async getMentorAvailableSlots({ mentorId, date }) {
@@ -1531,10 +1630,14 @@ const dbProvider = {
 
     const skill = await db.getAsync(
       `SELECT * FROM skills_offered WHERE user_id = ? AND LOWER(name) LIKE ?`,
-      [tutorId, `%${finalSkill.toLowerCase().split(' ')[0]}%`]
+      [tutor.id, `%${finalSkill.toLowerCase().split(' ')[0]}%`]
     );
+    const tutorAttempts = await db.allAsync(`SELECT * FROM quiz_attempts WHERE user_id = ?`, [tutor.id]) || [];
+    const tutorMaxQuiz = tutorAttempts.reduce((max, a) => Math.max(max, Number(a.score_percent) || 0), 0);
+    const tutorTierInfo = determineTutorTier(tutorMaxQuiz, Boolean(cert));
+
     const requestedRate = customRate != null ? Number(customRate) : (credits != null ? Number(credits) : null);
-    const rate = requestedRate != null && !isNaN(requestedRate) ? requestedRate : (skill ? Number(skill.rate) : (tutor.rating >= 4.8 ? 2.5 : 2.0));
+    const rate = requestedRate != null && !isNaN(requestedRate) ? requestedRate : (skill && skill.rate != null ? Number(skill.rate) : tutorTierInfo.rate);
     const requiredCredits = Math.round((hours * rate) * 100) / 100;
 
     // 3. Check learner balance
@@ -3591,23 +3694,47 @@ const dbProvider = {
       if (ampm === 'AM' && hours === 12) hours = 0;
     }
 
-    // Local timezone date construction (matches laptop system time)
-    const localScheduledDate = new Date(year, month - 1, day, hours, minutes, 0, 0);
-    let startMs = localScheduledDate.getTime();
+    // Always anchor strictly to Indian Standard Time (IST / Asia/Kolkata, UTC+05:30)
+    // IST offset is uniform throughout the year: +5.5 hours = +19,800,000 ms (no DST)
+    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+    let startMs = Date.UTC(year, month - 1, day, hours, minutes, 0, 0) - IST_OFFSET_MS;
     if (isNaN(startMs)) {
-      startMs = session.created_at ? new Date(session.created_at).getTime() : Date.now();
+      startMs = session.scheduled_start_ms ? Number(session.scheduled_start_ms) : (session.created_at ? new Date(session.created_at).getTime() : Date.now());
     }
 
     const endMs = startMs + Math.round(durationHours * 3600000);
     const nowMs = Date.now();
+    const timeRemaining = startMs - nowMs;
+    const isPastEnd = nowMs >= endMs;
+    const isStarted = nowMs >= startMs;
+    const START_WINDOW_MS = 5 * 60 * 1000; // 5 min early joining window
+    const isStartingNow = !isStarted && timeRemaining <= START_WINDOW_MS && timeRemaining > 0;
+    const canJoin = isStarted || isStartingNow;
+
+    let statusText = 'Upcoming';
+    if (isPastEnd) {
+      statusText = 'Session completed';
+    } else if (isStarted) {
+      statusText = 'Session in progress';
+    } else if (isStartingNow) {
+      statusText = 'Starting now';
+    } else {
+      const totalSec = Math.floor(timeRemaining / 1000);
+      const hrs = Math.floor(totalSec / 3600);
+      const mins = Math.floor((totalSec % 3600) / 60);
+      statusText = hrs > 0 ? `Starts in ${hrs}h ${mins}m` : `Starts in ${mins}m`;
+    }
 
     return {
       startTime: startMs,
       endTime: endMs,
-      isStarted: nowMs >= startMs,
-      isPastEnd: nowMs >= endMs,
+      isStarted,
+      isPastEnd,
+      isStartingNow,
+      canJoin,
+      statusText,
       remainingMs: Math.max(0, endMs - nowMs),
-      startsInMs: Math.max(0, startMs - nowMs)
+      startsInMs: Math.max(0, timeRemaining)
     };
   },
 
